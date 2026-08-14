@@ -1,0 +1,41 @@
+{
+  "name": "@emet/trace-grab",
+  "version": "0.1.0",
+  "description": "Read a partner's trace export, normalize it, sanitize it, write a bundle to their own disk. Contributor-side, open source, zero Emet egress.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "trace-grab": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "types": "dist/cli.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emet-labs/trace-grab.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "bun run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^20.19.0"
+  }
+}
