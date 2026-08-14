@@ -1,6 +1,6 @@
 # ADR-0014 · Corpus data is a distinct class from monitored-tenant data
 
-**Status:** Decided here; **a mirror ADR must land in `sentinel/docs/adr/`** (issue #22).
+**Status:** Decided here; **a mirror ADR must land in `sentinel/docs/adr/`** ([sentinel#79](https://github.com/emet-labs/sentinel/issues/79)).
 
 ## Context — an apparent contradiction
 

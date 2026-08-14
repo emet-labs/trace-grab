@@ -141,7 +141,7 @@ buried, because names are the vocabulary the entire analysis is built on.
 - **A written misconfiguration protocol ships before outreach** (issue #23). Someone will
   eventually `reveal:` a field they shouldn't. Quarantine, notify, delete on request, confirm in
   writing, never propagate to derived artifacts.
-- **Detection runs on our side, as an alarm** (issue #24). Detectors are unacceptable as a
+- **Detection runs on our side, as an alarm** ([sentinel#80](https://github.com/emet-labs/sentinel/issues/80)). Detectors are unacceptable as a
   redaction mechanism because a false negative leaks; as a receiving-end alarm a false negative
   costs nothing and a true positive means we catch a partner's mistake before they do.
 
@@ -151,7 +151,7 @@ buried, because names are the vocabulary the entire analysis is built on.
 | --- | --- |
 | Adoption | A partner completes `grab` with zero configuration and zero questions to us. |
 | Trust | At least one partner's security reviewer approves the transfer citing the report or the source, not a call with us. |
-| Fidelity | The SagaShop semantic gate (issue #21) shows known properties remain minable post-sanitization. |
+| Fidelity | The SagaShop semantic gate ([sentinel#78](https://github.com/emet-labs/sentinel/issues/78)) shows known properties remain minable post-sanitization. |
 | Leakage | Canary suite green; zero plaintext findings from the ingest-side alarm across cohort one. |
 | Reuse | `sentinel/ingest` adapts `trace-corpus-v1` without a change to the corpus format. |
 

@@ -7,7 +7,7 @@ directory is written for a contributor of traces.
 | --- | --- |
 | [PRD.md](PRD.md) | What we're building, who runs it, what ships in v1, and the program constraints that bind the tool. |
 | [adr/](adr/) | The decisions, each recording what was rejected and why. Numbered, append-only — supersede rather than edit. |
-| [Issues](https://github.com/emet-labs/trace-grab/issues) | The work. Milestones M0–M5; `repo:` labels mark items belonging to `emet/sentinel` or the campaign docs. |
+| [Issues](https://github.com/emet-labs/trace-grab/issues) | The work. Milestones M0–M5, with native issue dependencies wired so the unblocked frontier is always readable. Four sentinel-side items live in [emet-labs/sentinel](https://github.com/emet-labs/sentinel/issues) and are linked as cross-repo blockers. |
 
 ## Reading order
 
@@ -19,7 +19,7 @@ ADR-0026's rejection of redact-at-source.
 
 > [!IMPORTANT]
 > Two gates before shipping. **Before the first partner:** the SagaShop semantic gate
-> ([#21](https://github.com/emet-labs/trace-grab/issues/21)) and the written misconfiguration
+> ([sentinel#78](https://github.com/emet-labs/sentinel/issues/78)) and the written misconfiguration
 > protocol ([#23](https://github.com/emet-labs/trace-grab/issues/23)). **Before any public
 > release:** the no-egress test ([#17](https://github.com/emet-labs/trace-grab/issues/17)) and
 > provenance publishing ([#18](https://github.com/emet-labs/trace-grab/issues/18)).
