@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "publishConfig": {
