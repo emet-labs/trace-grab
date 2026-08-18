@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import { statSync, readFileSync } from "node:fs";
 
 import { writeBundle } from "./bundle/index.js";
+import type { RawRecord } from "./normalize/index.js";
 import { loadOrCreateSalt, sanitizeRecord } from "./sanitize/index.js";
-import { readGenericJsonl } from "./sources/index.js";
+import { readGenericJsonl, readLangSmithExport } from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
 
@@ -17,16 +19,61 @@ function parseFlag(args: string[], flag: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
+/** Strip a `--flag value` pair from args, returning the remaining positional/flag args. */
+function dropFlag(args: string[], flag: string): string[] {
+  const index = args.indexOf(flag);
+  if (index === -1) return args;
+  return args.slice(0, index).concat(args.slice(index + 2));
+}
+
+/**
+ * Sniff an input file for LangSmith shape: a non-blank first line whose parsed object carries
+ * `run_type` or `parent_run_id`. Only applies to single JSONL/JSON files — directories require
+ * an explicit `--from langsmith`.
+ */
+function looksLikeLangSmith(path: string): boolean {
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch {
+    return false;
+  }
+  if (stats.isDirectory()) return false;
+  const text = readFileSync(path, "utf8");
+  for (const line of text.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>;
+        return "run_type" in record || "parent_run_id" in record;
+      }
+    } catch {
+      return false;
+    }
+    break;
+  }
+  return false;
+}
+
+function readInput(input: string, from: string | undefined): RawRecord[] {
+  const source = from ?? (looksLikeLangSmith(input) ? "langsmith" : "generic");
+  if (source === "langsmith") return readLangSmithExport(input);
+  return readGenericJsonl(input);
+}
+
 function grab(args: string[]): void {
-  const [input] = args;
-  const out = parseFlag(args, "--out");
+  const from = parseFlag(args, "--from");
+  const positional = dropFlag(args, "--from");
+  const [input] = positional;
+  const out = parseFlag(positional, "--out");
   if (!input || !out) {
-    console.error("Usage: trace-grab grab <input> --out <dir>");
+    console.error("Usage: trace-grab grab <input> --out <dir> [--from langsmith|generic]");
     process.exitCode = 1;
     return;
   }
 
-  const rawRecords = readGenericJsonl(input);
+  const rawRecords = readInput(input, from);
   const salt = loadOrCreateSalt();
   const corpusRecords = rawRecords.map((record) => sanitizeRecord(record, salt));
   writeBundle(out, corpusRecords);
