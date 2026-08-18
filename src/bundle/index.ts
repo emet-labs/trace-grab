@@ -56,7 +56,7 @@ function renderReport(manifest: Manifest): string {
     `- Distinct dotted paths: ${manifest.counts.distinct_paths}`,
     `- Distinct tokens: ${manifest.counts.distinct_tokens}`,
     `- Dangling parents: ${manifest.counts.dangling_parents}`,
-    `- Excluded traces: ${manifest.counts.excluded_traces}`,
+    `- Excluded traces: ${manifest.counts.excluded_traces} (by window: ${manifest.counts.excluded_by_window}, by limit: ${manifest.counts.excluded_by_limit})`,
     ``,
     `## Pass-verbatim field inventory`,
     ``,
@@ -75,9 +75,16 @@ function renderReport(manifest: Manifest): string {
  * SHA-256 hash. Never holds the full corpus in memory — each record is serialized,
  * hashed, and written before the next is touched. After streaming, writes
  * `manifest.json`, `policy.yaml` (materialized default policy), and `report.md`
- * (structural skeleton — full rendering is issue #9).
+ * (structural skeleton — full rendering is issue #9). `excludedByLimit` and
+ * `excludedByWindow` carry the whole-trace exclusion counts from limiting
+ * (ADR-0011) into the manifest.
  */
-export async function writeBundle(outDir: string, records: CorpusRecord[]): Promise<void> {
+export async function writeBundle(
+  outDir: string,
+  records: CorpusRecord[],
+  excludedByLimit = 0,
+  excludedByWindow = 0,
+): Promise<void> {
   mkdirSync(outDir, { recursive: true });
 
   const corpusPath = join(outDir, "corpus.jsonl");
@@ -101,7 +108,7 @@ export async function writeBundle(outDir: string, records: CorpusRecord[]): Prom
   });
 
   const corpusHash = hash.digest("hex");
-  const manifest = buildManifest(records, corpusHash);
+  const manifest = buildManifest(records, corpusHash, excludedByLimit, excludedByWindow);
   writeFileSync(join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(outDir, "policy.yaml"), DEFAULT_POLICY_YAML);
   writeFileSync(join(outDir, "report.md"), renderReport(manifest));
