@@ -19,7 +19,10 @@ export interface ManifestCounts {
   distinct_paths: number;
   distinct_tokens: number;
   dangling_parents: number;
+  /** Total traces excluded by limiting + window (backward-compatible aggregate). */
   excluded_traces: number;
+  excluded_by_limit: number;
+  excluded_by_window: number;
 }
 
 export interface Manifest {
@@ -64,9 +67,16 @@ function collectTokens(value: unknown, tokens: Set<string>): void {
 /**
  * Builds the bundle manifest. `corpusHash` is the SHA-256 hex digest computed
  * while streaming `corpus.jsonl` — the writer feeds it in so the manifest
- * never re-hashes or re-reads the corpus from disk.
+ * never re-hashes or re-reads the corpus from disk. `excludedByLimit` and
+ * `excludedByWindow` are the whole-trace exclusion counts from limiting
+ * (ADR-0011); `excluded_traces` carries their sum for backward compatibility.
  */
-export function buildManifest(records: CorpusRecord[], corpusHash: string): Manifest {
+export function buildManifest(
+  records: CorpusRecord[],
+  corpusHash: string,
+  excludedByLimit = 0,
+  excludedByWindow = 0,
+): Manifest {
   const idTokens = new Set(records.map((record) => record.id));
   const paths = new Set<string>();
   const tokens = new Set<string>();
@@ -93,7 +103,9 @@ export function buildManifest(records: CorpusRecord[], corpusHash: string): Mani
       distinct_paths: paths.size,
       distinct_tokens: tokens.size,
       dangling_parents: danglingParents,
-      excluded_traces: 0,
+      excluded_traces: excludedByLimit + excludedByWindow,
+      excluded_by_limit: excludedByLimit,
+      excluded_by_window: excludedByWindow,
     },
     policy_hash: createHash("sha256").update(BUILTIN_POLICY_DESCRIPTOR).digest("hex"),
     corpus_sha256: corpusHash,
