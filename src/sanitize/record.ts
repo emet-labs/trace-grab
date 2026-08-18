@@ -321,6 +321,12 @@ export function sanitizeRecord(
   onToken?: OnToken,
   onInventory?: OnInventory,
 ): CorpusRecord {
+  // `status` is an enum that always passes verbatim (POLICY.md: not droppable, not free text).
+  // It is intentionally NOT routed through `resolveString` (which would fail-close to tokenize on
+  // a `drop` policy); the direct assignment enforces "always pass." Announce the decision to the
+  // inventory observer so the path set is complete — disposition `default`, example = real value,
+  // mirroring `resolveString`'s builtin pass-verbatim recording for `name`/`kind`.
+  onInventory?.("status", "default", record.status);
   return {
     id: resolveString(record.id, "id", resolver, salt, onToken, onInventory),
     trace_id: resolveString(record.trace_id, "trace_id", resolver, salt, onToken, onInventory),

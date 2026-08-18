@@ -235,6 +235,13 @@ describe("issue #7: sanitization walk and path inventory", () => {
       expect(name.disposition).toBe("default");
       expect(name.example).toBe("probe");
 
+      // `status` is an enum that always passes verbatim (POLICY.md) — recorded with disposition
+      // `default` and the real value, despite NOT being routed through `resolveString`.
+      const status = inv.get("status")!;
+      expect(status.disposition).toBe("default");
+      expect(status.example).toBe("ok");
+      expect(status.occurrences).toBe(1);
+
       // Top-level tokenized id: disposition `default`, example is the token.
       const id = inv.get("id")!;
       expect(id.disposition).toBe("default");
