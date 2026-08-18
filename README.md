@@ -110,6 +110,15 @@ Each of these is checkable, not a promise:
 | Network calls exist in exactly one file, and only to your vendor | `src/sources/langsmith-api.ts`; CI fails if that changes |
 | The published package is built from this repo | `npm audit signatures` |
 
+## CI enforces zero egress
+
+Every pull request runs [`test/no-egress.test.ts`](test/no-egress.test.ts), which fails the build
+if any file under `src/` references an Emet-owned domain outside the package scope, if a network
+primitive (`fetch`, `node:http`, `node:https`, `node:net`, `WebSocket`) appears outside the single
+fetcher module, or if a Bun-specific API leaks into `src/`. A second job builds the package, runs
+`npm pack`, installs the tarball into a scratch directory, and smoke-tests `trace-grab grab` under
+Node 20 and Node 22 — so the published shape is the one CI proved runnable under plain Node.
+
 ## Sending a corpus
 
 There is no upload command. When you're ready:
