@@ -8,7 +8,16 @@ import { checkValue, type CheckResult } from "./check/index.js";
 import { writeBundle } from "./bundle/index.js";
 import { limitTraces } from "./limit/index.js";
 import type { RawRecord } from "./normalize/index.js";
-import { PolicyError, PolicyResolver, loadPolicy, loadOrCreateSalt, loadSalt, sanitizeRecord } from "./sanitize/index.js";
+import {
+  PolicyError,
+  PolicyResolver,
+  Keymap,
+  loadPolicy,
+  loadOrCreateSaltWithMeta,
+  loadSalt,
+  sanitizeRecord,
+  writeTraceGrabGitignore,
+} from "./sanitize/index.js";
 import { looksLikeOtlp, readGenericJsonl, readLangSmithExport, readOtlpJson } from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
@@ -17,7 +26,9 @@ Commands:
   grab <input> --out <dir>   Read, normalize, sanitize, and write a bundle
     [--from langsmith|otlp|generic]
     [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>]
+    [--salt-file <path>] [--no-keymap]
   check --value <v> <bundle-dir>  Locate a value's token and any plaintext hits
+    [--salt-file <path>]
 
 Run 'trace-grab <command> --help' for command-specific options.`;
 
@@ -31,6 +42,11 @@ function dropFlag(args: string[], flag: string): string[] {
   const index = args.indexOf(flag);
   if (index === -1) return args;
   return args.slice(0, index).concat(args.slice(index + 2));
+}
+
+/** Strip a boolean `--flag` (no value) from args, returning the remaining args. */
+function dropBooleanFlag(args: string[], flag: string): string[] {
+  return args.filter((a) => a !== flag);
 }
 
 /**
@@ -83,17 +99,21 @@ async function grab(args: string[]): Promise<void> {
   const until = parseFlag(args, "--until");
   const maxTracesRaw = parseFlag(args, "--max-traces");
   const policyPath = parseFlag(args, "--policy");
+  const saltFile = parseFlag(args, "--salt-file");
+  const noKeymap = args.includes("--no-keymap");
 
   let positional = dropFlag(args, "--from");
   positional = dropFlag(positional, "--since");
   positional = dropFlag(positional, "--until");
   positional = dropFlag(positional, "--max-traces");
   positional = dropFlag(positional, "--policy");
+  positional = dropFlag(positional, "--salt-file");
+  positional = dropBooleanFlag(positional, "--no-keymap");
   const [input] = positional;
   const out = parseFlag(positional, "--out");
   if (!input || !out) {
     console.error(
-      "Usage: trace-grab grab <input> --out <dir> [--from langsmith|otlp|generic] [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>]",
+      "Usage: trace-grab grab <input> --out <dir> [--from langsmith|otlp|generic] [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>] [--salt-file <path>] [--no-keymap]",
     );
     process.exitCode = 1;
     return;
@@ -137,13 +157,33 @@ async function grab(args: string[]): Promise<void> {
 
   const rawRecords = readInput(input, from);
   const { kept, excludedByWindow, excludedByLimit } = limitTraces(rawRecords, { since, until, maxTraces });
-  const salt = loadOrCreateSalt();
-  const corpusRecords = kept.map((record) => sanitizeRecord(record, salt, resolver));
+
+  // Persistent salt (ADR-0006): minted once at the default `.trace-grab/salt` (or `--salt-file`),
+  // reused thereafter. The `created` flag drives the first-run notice so the warning fires once.
+  const root = process.cwd();
+  const { salt, created, path: saltPath } = loadOrCreateSaltWithMeta(root, saltFile);
+  if (created) {
+    console.log(
+      `notice: created partner salt at ${saltPath}. Losing this salt breaks cross-batch token correlation — back it up (ADR-0006).`,
+    );
+  }
+
+  // Local reverse keymap (ADR-0006): buffered during the walk, flushed once after. Suppressed by
+  // `--no-keymap`; lives in `.trace-grab/keymap.jsonl`, never inside the bundle directory.
+  const keymapPath = join(root, ".trace-grab", "keymap.jsonl");
+  const keymap = noKeymap ? undefined : Keymap.open(keymapPath);
+  const onToken = keymap?.callback();
+  const corpusRecords = kept.map((record) => sanitizeRecord(record, salt, resolver, onToken));
 
   const warnings = resolver.unmatchedWarnings();
   const policyYaml = existsSync(effectivePolicyPath) ? readFileSync(effectivePolicyPath, "utf8") : undefined;
   const policyHash = policyYaml !== undefined ? createHash("sha256").update(policyYaml).digest("hex") : undefined;
   await writeBundle(out, corpusRecords, excludedByLimit, excludedByWindow, { policyYaml, policyHash, warnings });
+
+  // Flush the keymap (mode 0600) and refresh the `.trace-grab/.gitignore` after the bundle is
+  // safely written — the keymap never enters the bundle directory.
+  keymap?.flush();
+  writeTraceGrabGitignore(root);
 
   console.log(
     `Wrote ${corpusRecords.length} record(s) to ${out}` +
@@ -163,15 +203,16 @@ export async function check(
   cwd: string = process.cwd(),
 ): Promise<{ exitCode: number; result: CheckResult }> {
   const value = parseFlag(args, "--value");
-  const positional = dropFlag(args, "--value");
+  const saltFile = parseFlag(args, "--salt-file");
+  const positional = dropFlag(dropFlag(args, "--value"), "--salt-file");
   const [bundleDir] = positional;
 
   if (!value || !bundleDir) {
-    console.error("Usage: trace-grab check --value <v> <bundle-dir>");
+    console.error("Usage: trace-grab check --value <v> <bundle-dir> [--salt-file <path>]");
     return { exitCode: 1, result: { token: "", tokenHits: 0, plaintextHits: [] } };
   }
 
-  const salt = loadSalt(cwd);
+  const salt = loadSalt(cwd, saltFile);
   const result = await checkValue(value, join(bundleDir, "corpus.jsonl"), salt);
 
   if (result.plaintextHits.length === 0) {
