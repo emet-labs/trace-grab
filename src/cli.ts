@@ -4,7 +4,7 @@ import { statSync, readFileSync } from "node:fs";
 import { writeBundle } from "./bundle/index.js";
 import type { RawRecord } from "./normalize/index.js";
 import { loadOrCreateSalt, sanitizeRecord } from "./sanitize/index.js";
-import { readGenericJsonl, readLangSmithExport } from "./sources/index.js";
+import { looksLikeOtlp, readGenericJsonl, readLangSmithExport, readOtlpJson } from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
 
@@ -57,9 +57,17 @@ function looksLikeLangSmith(path: string): boolean {
 }
 
 function readInput(input: string, from: string | undefined): RawRecord[] {
-  const source = from ?? (looksLikeLangSmith(input) ? "langsmith" : "generic");
+  const source = from ?? sniffSource(input);
   if (source === "langsmith") return readLangSmithExport(input);
+  if (source === "otlp") return readOtlpJson(input);
   return readGenericJsonl(input);
+}
+
+/** Auto-detect the source format from file content, defaulting to generic JSONL. */
+function sniffSource(path: string): string {
+  if (looksLikeOtlp(path)) return "otlp";
+  if (looksLikeLangSmith(path)) return "langsmith";
+  return "generic";
 }
 
 function grab(args: string[]): void {
@@ -68,7 +76,7 @@ function grab(args: string[]): void {
   const [input] = positional;
   const out = parseFlag(positional, "--out");
   if (!input || !out) {
-    console.error("Usage: trace-grab grab <input> --out <dir> [--from langsmith|generic]");
+    console.error("Usage: trace-grab grab <input> --out <dir> [--from langsmith|otlp|generic]");
     process.exitCode = 1;
     return;
   }

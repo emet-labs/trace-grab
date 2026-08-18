@@ -1,0 +1,140 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "checkout-service" } },
+          { "key": "service.version", "value": { "stringValue": "1.4.2" } },
+          { "key": "host.name", "value": { "stringValue": "node-1" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "io.opentelemetry.tomcat",
+            "version": "1.0.0",
+            "attributes": [
+              { "key": "language", "value": { "stringValue": "java" } }
+            ]
+          },
+          "spans": [
+            {
+              "traceId": "0af7651916cd43dd8348d211272f4b7e",
+              "spanId": "ee1479f1beab96a4",
+              "name": "HTTP GET /checkout",
+              "kind": 1,
+              "startTimeUnixNano": "1700000000000000000",
+              "endTimeUnixNano": "1700000005000000000",
+              "status": { "code": 1 },
+              "attributes": [
+                { "key": "http.method", "value": { "stringValue": "GET" } },
+                { "key": "http.status_code", "value": { "intValue": "200" } },
+                { "key": "http.duration_ms", "value": { "doubleValue": 42.5 } },
+                { "key": "cache.hit", "value": { "boolValue": true } },
+                { "key": "response.headers", "value": { "kvlistValue": { "values": [
+                  { "key": "content-type", "value": { "stringValue": "application/json" } },
+                  { "key": "x-trace-id", "value": { "stringValue": "abc123" } }
+                ] } } },
+                { "key": "payload.bytes", "value": { "bytesValue": "aGVsbG8gd29ybGQ=" } }
+              ],
+              "links": [
+                {
+                  "traceId": "ff7651916cd43dd8348d211272f4bff",
+                  "spanId": "aa1479f1beab96b0",
+                  "attributes": [
+                    { "key": "link.reason", "value": { "stringValue": "fan-in" } }
+                  ]
+                }
+              ],
+              "flags": 256
+            },
+            {
+              "traceId": "0af7651916cd43dd8348d211272f4b7e",
+              "spanId": "ee1479f1beab96a5",
+              "parentSpanId": "ee1479f1beab96a4",
+              "name": "charge-card",
+              "kind": 2,
+              "startTimeUnixNano": "1700000000100000000",
+              "endTimeUnixNano": "1700000000400000000",
+              "status": { "code": 2, "message": "card declined" },
+              "attributes": [
+                { "key": "rpc.system", "value": { "stringValue": "grpc" } },
+                { "key": "retry.counts", "value": { "arrayValue": { "values": [
+                  { "intValue": "1" },
+                  { "intValue": "2" },
+                  { "intValue": "3" }
+                ] } } }
+              ]
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "gen_ai.instrumentation",
+            "version": "0.2.0"
+          },
+          "spans": [
+            {
+              "traceId": "0af7651916cd43dd8348d211272f4b7e",
+              "spanId": "ee1479f1beab96a6",
+              "parentSpanId": "ee1479f1beab96a4",
+              "name": "chat gpt-4",
+              "kind": 0,
+              "startTimeUnixNano": "1700000000150000000",
+              "endTimeUnixNano": "1700000000250000000",
+              "status": { "code": 0 },
+              "attributes": [
+                { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-4" } },
+                { "key": "gen_ai.response.model", "value": { "stringValue": "gpt-4-0613" } },
+                { "key": "gen_ai.usage.prompt_tokens", "value": { "intValue": "128" } },
+                { "key": "gen_ai.usage.completion_tokens", "value": { "intValue": "64" } }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "inventory-service" } },
+          { "key": "telemetry.sdk.language", "value": { "stringValue": "python" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "io.opentelemetry.kafka",
+            "version": "0.5.0"
+          },
+          "spans": [
+            {
+              "traceId": "1bf7651916cd43dd8348d211272f4c8f",
+              "spanId": "ff00aabbccdd0001",
+              "parentSpanId": "deadbeef00000000",
+              "name": "consume order-events",
+              "kind": 4,
+              "startTimeUnixNano": "1700000001000000000",
+              "status": { "code": 0 },
+              "attributes": [
+                { "key": "messaging.system", "value": { "stringValue": "kafka" } },
+                { "key": "messaging.destination", "value": { "stringValue": "order-events" } }
+              ]
+            },
+            {
+              "traceId": "1bf7651916cd43dd8348d211272f4c8f",
+              "spanId": "ff00aabbccdd0002",
+              "parentSpanId": "ff00aabbccdd0001",
+              "name": "process order",
+              "kind": 3,
+              "startTimeUnixNano": "1700000001100000000",
+              "endTimeUnixNano": "1700000001200000000",
+              "status": { "code": 1 },
+              "attributes": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
