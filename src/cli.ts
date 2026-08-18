@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { statSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
+import { checkValue, type CheckResult } from "./check/index.js";
 import { writeBundle } from "./bundle/index.js";
 import { limitTraces } from "./limit/index.js";
 import type { RawRecord } from "./normalize/index.js";
-import { loadOrCreateSalt, sanitizeRecord } from "./sanitize/index.js";
+import { loadOrCreateSalt, loadSalt, sanitizeRecord } from "./sanitize/index.js";
 import { looksLikeOtlp, readGenericJsonl, readLangSmithExport, readOtlpJson } from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
@@ -13,7 +16,7 @@ Commands:
   grab <input> --out <dir>   Read, normalize, sanitize, and write a bundle
     [--from langsmith|otlp|generic]
     [--since <iso>] [--until <iso>] [--max-traces <n>]
-  check --value <v>          Locate a value's token in a bundle
+  check --value <v> <bundle-dir>  Locate a value's token and any plaintext hits
 
 Run 'trace-grab <command> --help' for command-specific options.`;
 
@@ -126,6 +129,41 @@ async function grab(args: string[]): Promise<void> {
   );
 }
 
+/**
+ * `check --value <v> <bundle-dir>`: locates a value's token and any plaintext leaks in a
+ * finished bundle (issue #14). Tokenizes the value with the partner salt, streams
+ * `corpus.jsonl`, and reports token hits and plaintext hits. Exits non-zero when the
+ * value survives in plaintext so a partner can gate CI on it. Read-only — the searched
+ * value is never written to disk.
+ */
+export async function check(
+  args: string[],
+  cwd: string = process.cwd(),
+): Promise<{ exitCode: number; result: CheckResult }> {
+  const value = parseFlag(args, "--value");
+  const positional = dropFlag(args, "--value");
+  const [bundleDir] = positional;
+
+  if (!value || !bundleDir) {
+    console.error("Usage: trace-grab check --value <v> <bundle-dir>");
+    return { exitCode: 1, result: { token: "", tokenHits: 0, plaintextHits: [] } };
+  }
+
+  const salt = loadSalt(cwd);
+  const result = await checkValue(value, join(bundleDir, "corpus.jsonl"), salt);
+
+  if (result.plaintextHits.length === 0) {
+    console.log(`appears as ${result.token} in ${result.tokenHits} records; never appears in plaintext`);
+  } else {
+    console.log(`PLAINTEXT FOUND in ${result.plaintextHits.length} records:`);
+    for (const hit of result.plaintextHits) {
+      console.log(`  line ${hit.line}: ${hit.preview}`);
+    }
+  }
+
+  return { exitCode: result.plaintextHits.length > 0 ? 1 : 0, result };
+}
+
 function main(argv: string[]): void {
   const [command, ...rest] = argv;
 
@@ -137,11 +175,21 @@ function main(argv: string[]): void {
       });
       return;
     case "check":
-      throw new Error(`'${command}' is not yet implemented`);
+      void check(rest)
+        .then((outcome) => {
+          if (outcome.exitCode !== 0) process.exitCode = outcome.exitCode;
+        })
+        .catch((error) => {
+          console.error(error);
+          process.exitCode = 1;
+        });
+      return;
     default:
       console.log(USAGE);
       process.exitCode = command === undefined ? 0 : 1;
   }
 }
 
-main(process.argv.slice(2));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2));
+}

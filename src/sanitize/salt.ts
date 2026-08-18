@@ -20,3 +20,16 @@ export function loadOrCreateSalt(root: string = process.cwd()): Buffer {
   writeFileSync(path, salt, { mode: 0o600 });
   return salt;
 }
+
+/**
+ * Read the existing partner salt without minting one (ADR-0006). Used by `check`, which
+ * must fail loudly when no salt exists rather than silently creating a fresh one and
+ * reporting false negatives (the corpus was built under a different, now-absent salt).
+ */
+export function loadSalt(root: string = process.cwd()): Buffer {
+  const path = join(root, SALT_RELATIVE_PATH);
+  if (!existsSync(path)) {
+    throw new Error(`No salt found at ${path}. Run 'trace-grab grab' in this directory first.`);
+  }
+  return readFileSync(path);
+}
