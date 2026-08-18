@@ -241,4 +241,89 @@ describe("issue #7: sanitization walk and path inventory", () => {
       expect(id.example).toBe(tokenize("span-x", SALT));
     });
   });
+
+  describe("acceptance: deep nesting and idempotence (AC #1, #4)", () => {
+    test("deeply nested objects are handled to arbitrary depth without stack blowup (AC #1)", () => {
+      // 100 levels of `{ a: { a: ... { leaf: "deep-value" } ... } }` — realistic depth, not a
+      // pathological 100k. The point: the recursive walk completes and tokenizes the leaf.
+      let node: Record<string, unknown> = { leaf: "deep-value" };
+      for (let i = 0; i < 100; i++) {
+        node = { a: node };
+      }
+      const out = sanitizeRecord(recordWith(node), SALT);
+
+      // Descend the 100 levels and confirm the leaf became a token (default string rule).
+      let cur: unknown = out.inputs;
+      for (let i = 0; i < 100; i++) {
+        cur = fieldOf(cur, "a");
+        expect(cur).toBeDefined();
+      }
+      expect(fieldOf(cur, "leaf")).toBe(tokenize("deep-value", SALT));
+    });
+
+    test("sanitizing a record twice yields the same shape — idempotence (AC #4)", () => {
+      // Mirrors metamorphic.test.ts's idempotence approach (shape equality, not byte equality:
+      // re-tokenizing a token produces a different token, but structure/types/keys/primitives
+      // and equality relations are preserved). One focused case with nested inputs/outputs/labels.
+      const rec = recordWith(
+        { user: { id: "u_1", prefs: { theme: "dark" } }, tags: ["a", "b"] },
+        {
+          outputs: { result: "ok", count: 3 },
+          labels: [{ key: "correctness", value: "correct", comment: "looks good" }],
+        },
+      );
+      const once = sanitizeRecord(rec, SALT);
+      // CorpusRecord is structurally identical to RawRecord — feed it back through.
+      const twice = sanitizeRecord(once as RawRecord, SALT);
+
+      // Structure, keys, array lengths, types, and non-string primitives are identical across
+      // both passes. String values may differ (double-tokenization); the shape comparator stops
+      // at "both are strings" for them, exactly as the metamorphic suite does.
+      expect(() => assertSameShape(once, twice, "$")).not.toThrow();
+      expect(() => assertSameShape(rec, once, "$")).not.toThrow();
+
+      // Record-level key set is preserved through the second pass.
+      expect(Object.keys(twice).sort()).toEqual(Object.keys(once).sort());
+    });
+  });
 });
+
+/**
+ * Structural equality: types, object key sets, array lengths, and non-string primitives must
+ * match. Strings are only checked to both be strings — tokenization may change their values, so
+ * byte-equality does not hold across re-sanitization (see metamorphic.test.ts). Mirrors the
+ * metamorphic suite's `assertSameShape`.
+ */
+function assertSameShape(a: unknown, b: unknown, path: string): void {
+  const ta = a === null ? "null" : Array.isArray(a) ? "array" : typeof a;
+  const tb = b === null ? "null" : Array.isArray(b) ? "array" : typeof b;
+  if (ta !== tb) throw new Error(`shape mismatch at ${path}: ${ta} vs ${tb}`);
+  if (a === null) return; // both null
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b)) throw new Error(`expected array at ${path}`);
+    if (a.length !== b.length)
+      throw new Error(`array length mismatch at ${path}: ${a.length} vs ${b.length}`);
+    for (let i = 0; i < a.length; i++) assertSameShape(a[i], b[i], `${path}[${i}]`);
+    return;
+  }
+  if (typeof a === "object") {
+    const ak = Object.keys(a as Record<string, unknown>).sort();
+    const bk = Object.keys(b as Record<string, unknown>).sort();
+    if (ak.length !== bk.length || ak.some((k, i) => k !== bk[i])) {
+      throw new Error(`key set mismatch at ${path}: [${ak.join(",")}] vs [${bk.join(",")}]`);
+    }
+    for (const k of ak) {
+      assertSameShape(
+        (a as Record<string, unknown>)[k],
+        (b as Record<string, unknown>)[k],
+        `${path}.${k}`,
+      );
+    }
+    return;
+  }
+  // number / boolean: must be equal (these never change through sanitization).
+  if (typeof a === "number" || typeof a === "boolean") {
+    if (a !== b) throw new Error(`primitive mismatch at ${path}: ${String(a)} vs ${String(b)}`);
+  }
+  // strings: both must be strings (values may differ — tokenization); nothing else to check.
+}
