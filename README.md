@@ -130,6 +130,18 @@ curl -T corpus.tar.gz "<the URL we gave you>"
 
 Or send it however your company prefers.
 
+## If the configuration leaks something
+
+Deny-by-default means the only way plaintext reaches the bundle is a field you named in `reveal:` — that is the leak surface ([ADR-0009](docs/adr/0009-four-disposition-policy-language.md)). It is also silent: a misspelled path matches nothing, and an over-broad one produces a run that looks correct ([ADR-0014](docs/adr/0014-corpus-data-is-a-distinct-class.md)). So this is the committed sequence for when that happens, written before the first corpus, not after.
+
+1. **Quarantine on detection.** The affected batch is moved out of the analysis path immediately. No new derived artifacts — mined candidate properties, aggregates, findings — are produced from it while it is under review.
+2. **Notify within one business day.** We tell you what we found and where: which field, which disposition rule let it through, and in how many records.
+3. **Delete on request.** Your call, no questions. The batch is removed and you get written confirmation, tied to the data-use agreement's deletable-on-request default.
+4. **No propagation into derived artifacts.** Deletion is not just the corpus file. Any candidate property the batch fed is not promoted to a real Specification; aggregates and findings retained after deletion are purged. This is the step that catches a leak a naive cleanup misses.
+5. **Ownership by role.** One role owns the technical steps — quarantine, deletion, derived-artifact audit; another owns the partner-facing steps — notification and written confirmation; counsel reviews both. By role, not name.
+
+Kept consistent with the retention and permitted-uses terms it operates under, and reviewed by counsel alongside the data-use agreement.
+
 ## Limits worth knowing
 
 - **Tool and span names pass through verbatim.** They are the vocabulary any analysis is written
