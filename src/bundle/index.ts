@@ -163,9 +163,42 @@ function renderCountsSection(manifest: Manifest): string {
 }
 
 /**
- * Renders `report.md` — a pure `(manifest, inventory) -> string` transform. Sections, in order:
- * header, (1) plaintext/reveal, (2) warnings, (3) path inventory table, (4) counts and integrity.
- * Transfer instructions and the keymap/salt note land in the next commit.
+ * Section 5 — transfer instructions. Documentation, not built-in behaviour (PRD §6: "Transfer is
+ * documented, not built"). A non-engineer can copy these and fill in the presigned URL.
+ */
+function renderTransferSection(): string {
+  return [
+    "## Transfer",
+    "",
+    "Archive and upload the bundle. These commands are documentation, not part of trace-grab — copy them and fill in the presigned URL your partner contact gives you.",
+    "",
+    "1. Archive the bundle directory:",
+    "```",
+    "tar -czf corpus.tar.gz -C <bundle-dir> .",
+    "```",
+    "2. Upload the archive to the presigned URL:",
+    "```",
+    "curl -T corpus.tar.gz https://upload.example.net/PLACEHOLDER",
+    "```",
+  ].join("\n");
+}
+
+/**
+ * Section 6 — keymap and salt. Names both paths and states plainly that they were NOT included in
+ * the bundle; they live in the partner's working directory under `.trace-grab/` (ADR-0006).
+ */
+function renderKeymapSection(): string {
+  return [
+    "## Keymap and salt",
+    "",
+    "The local reverse keymap (`.trace-grab/keymap.jsonl`) and the partner salt (`.trace-grab/salt`) were NOT included in this bundle. They live in your working directory under `.trace-grab/`, never inside the bundle. Back them up — losing the salt breaks cross-batch token correlation (ADR-0006).",
+  ].join("\n");
+}
+
+/**
+ * Renders `report.md` — a pure `(manifest, inventory) -> string` transform, no I/O. Sections, in
+ * order: header, (1) plaintext/reveal, (2) warnings, (3) path inventory table, (4) counts and
+ * integrity, (5) transfer instructions, (6) keymap and salt note (issue #9).
  */
 export function renderReport(manifest: Manifest, inventory: InventoryEntry[]): string {
   return [
@@ -174,6 +207,8 @@ export function renderReport(manifest: Manifest, inventory: InventoryEntry[]): s
     renderWarningsSection(manifest, inventory),
     renderInventorySection(inventory),
     renderCountsSection(manifest),
+    renderTransferSection(),
+    renderKeymapSection(),
   ].join("\n\n") + "\n";
 }
 
