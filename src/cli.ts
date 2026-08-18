@@ -70,7 +70,7 @@ function sniffSource(path: string): string {
   return "generic";
 }
 
-function grab(args: string[]): void {
+async function grab(args: string[]): Promise<void> {
   const from = parseFlag(args, "--from");
   const positional = dropFlag(args, "--from");
   const [input] = positional;
@@ -84,7 +84,7 @@ function grab(args: string[]): void {
   const rawRecords = readInput(input, from);
   const salt = loadOrCreateSalt();
   const corpusRecords = rawRecords.map((record) => sanitizeRecord(record, salt));
-  writeBundle(out, corpusRecords);
+  await writeBundle(out, corpusRecords);
 
   console.log(`Wrote ${corpusRecords.length} record(s) to ${out}`);
 }
@@ -94,7 +94,10 @@ function main(argv: string[]): void {
 
   switch (command) {
     case "grab":
-      grab(rest);
+      void grab(rest).catch((error) => {
+        console.error(error);
+        process.exitCode = 1;
+      });
       return;
     case "check":
       throw new Error(`'${command}' is not yet implemented`);

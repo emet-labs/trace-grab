@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { writeBundle } from "../src/bundle/index.js";
+import { stableStringify } from "../src/bundle/stable-stringify.js";
 import type { CorpusRecord, JsonValue, RawRecord } from "../src/normalize/index.js";
 import { loadOrCreateSalt, sanitizeRecord } from "../src/sanitize/index.js";
 import { readGenericJsonl } from "../src/sources/index.js";
@@ -21,7 +22,12 @@ afterEach(() => {
   }
 });
 
-function run() {
+async function run(): Promise<{
+  workDir: string;
+  outDir: string;
+  rawRecords: RawRecord[];
+  corpusRecords: CorpusRecord[];
+}> {
   const workDir = mkdtempSync(join(tmpdir(), "trace-grab-test-"));
   workDirs.push(workDir);
   const outDir = join(workDir, "corpus");
@@ -29,7 +35,7 @@ function run() {
   const rawRecords = readGenericJsonl(FIXTURE_PATH);
   const salt = loadOrCreateSalt(workDir);
   const corpusRecords = rawRecords.map((record) => sanitizeRecord(record, salt));
-  writeBundle(outDir, corpusRecords);
+  await writeBundle(outDir, corpusRecords);
 
   return { workDir, outDir, rawRecords, corpusRecords };
 }
@@ -52,14 +58,14 @@ function assertAllStringsTokenized(value: JsonValue, path: string): void {
 }
 
 describe("grab end to end", () => {
-  test("record count in equals record count out", () => {
-    const { rawRecords, corpusRecords } = run();
+  test("record count in equals record count out", async () => {
+    const { rawRecords, corpusRecords } = await run();
     expect(corpusRecords.length).toBe(rawRecords.length);
     expect(rawRecords.length).toBe(100);
   });
 
-  test("zero plaintext string values outside pass-verbatim fields", () => {
-    const { corpusRecords } = run();
+  test("zero plaintext string values outside pass-verbatim fields", async () => {
+    const { corpusRecords } = await run();
 
     for (const record of corpusRecords) {
       expect(record.id).toMatch(TOKEN_PATTERN);
@@ -83,8 +89,8 @@ describe("grab end to end", () => {
     }
   });
 
-  test("pass-verbatim fields are unchanged", () => {
-    const { rawRecords, corpusRecords } = run();
+  test("pass-verbatim fields are unchanged", async () => {
+    const { rawRecords, corpusRecords } = await run();
 
     for (let i = 0; i < rawRecords.length; i++) {
       const raw = rawRecords[i] as RawRecord;
@@ -102,8 +108,8 @@ describe("grab end to end", () => {
     }
   });
 
-  test("equal input values produce equal tokens across different records and different paths", () => {
-    const { rawRecords, corpusRecords } = run();
+  test("equal input values produce equal tokens across different records and different paths", async () => {
+    const { rawRecords, corpusRecords } = await run();
     const valueToTokens = new Map<string, Set<string>>();
 
     function record(value: string, token: string): void {
@@ -132,16 +138,103 @@ describe("grab end to end", () => {
     expect(valueToTokens.size).toBeLessThan(rawRecords.length * 4);
   });
 
-  test("writes corpus.jsonl and a manifest.json describing the run", () => {
-    const { outDir, rawRecords } = run();
+  test("writes corpus.jsonl and a manifest.json describing the run", async () => {
+    const { outDir, rawRecords } = await run();
 
-    const corpusLines = readFileSync(join(outDir, "corpus.jsonl"), "utf8").trim().split("\n");
+    // Each record is exactly one JSONL line (single-line, sorted keys).
+    const corpusText = readFileSync(join(outDir, "corpus.jsonl"), "utf8");
+    const corpusLines = corpusText.trim().split("\n");
     expect(corpusLines.length).toBe(rawRecords.length);
+    for (const line of corpusLines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
 
     const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf8"));
     expect(manifest.schema_version).toBe("trace-corpus-v1");
     expect(manifest.counts.records).toBe(rawRecords.length);
     expect(manifest.counts.dangling_parents).toBe(1);
     expect(manifest.warnings).toEqual([]);
+    // corpus_sha256 is the streaming hash of the corpus bytes.
+    expect(manifest.corpus_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("corpus.jsonl is byte-identical across two runs with the same salt", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "trace-grab-determinism-"));
+    workDirs.push(workDir);
+    const salt = loadOrCreateSalt(workDir);
+    const rawRecords = readGenericJsonl(FIXTURE_PATH);
+    const records = rawRecords.map((record) => sanitizeRecord(record, salt));
+
+    const outA = join(workDir, "a", "corpus");
+    const outB = join(workDir, "b", "corpus");
+    await writeBundle(outA, records);
+    await writeBundle(outB, records);
+
+    const corpusA = readFileSync(join(outA, "corpus.jsonl"), "utf8");
+    const corpusB = readFileSync(join(outB, "corpus.jsonl"), "utf8");
+    expect(corpusA).toBe(corpusB);
+
+    // manifest.json differs only in generated_at.
+    const manifestA = JSON.parse(readFileSync(join(outA, "manifest.json"), "utf8"));
+    const manifestB = JSON.parse(readFileSync(join(outB, "manifest.json"), "utf8"));
+    const { generated_at: _a, ...restA } = manifestA;
+    const { generated_at: _b, ...restB } = manifestB;
+    expect(restA).toEqual(restB);
+
+    // policy.yaml and report.md are deterministic too.
+    expect(readFileSync(join(outA, "policy.yaml"), "utf8")).toBe(
+      readFileSync(join(outB, "policy.yaml"), "utf8"),
+    );
+  });
+
+  test("stableStringify sorts object keys at every depth regardless of insertion order", () => {
+    const unsorted: JsonValue = {
+      b: { d: 1, c: 2, a: 3 },
+      a: [3, 1, 2],
+      c: null,
+    };
+    const text = stableStringify(unsorted);
+    // Compact, single-line output (valid JSONL — one record per line).
+    expect(text).not.toContain("\n");
+    const parsed = JSON.parse(text) as Record<string, JsonValue>;
+    // Top-level keys ascending.
+    expect(Object.keys(parsed)).toEqual(["a", "b", "c"]);
+    // Nested object keys ascending.
+    expect(Object.keys(parsed.b as Record<string, JsonValue>)).toEqual(["a", "c", "d"]);
+    // Array order preserved.
+    expect(parsed.a).toEqual([3, 1, 2]);
+    // Round-trips to the same value.
+    expect(JSON.parse(stableStringify(unsorted))).toEqual(unsorted);
+  });
+
+  test("writes policy.yaml and report.md alongside the bundle", async () => {
+    const { outDir, rawRecords, corpusRecords } = await run();
+    const traceCount = new Set(corpusRecords.map((r) => r.trace_id)).size;
+
+    const policy = readFileSync(join(outDir, "policy.yaml"), "utf8");
+    expect(policy).toContain("schema: trace-corpus-v1");
+    expect(policy).toContain("strings: tokenize");
+    expect(policy).toContain("numbers: pass");
+    expect(policy).toContain("keys: pass");
+    expect(policy).toContain("- name");
+    expect(policy).toContain("- kind");
+    expect(policy).toContain("- status");
+    expect(policy).toContain("- error.kind");
+    expect(policy).toContain("- labels[].key");
+    expect(policy).toContain("- labels[].value");
+    expect(policy).toContain("- source.vendor");
+    expect(policy).toContain("reveals: []");
+    expect(policy).toContain("drops: []");
+    expect(policy).toContain("time: absolute");
+
+    const report = readFileSync(join(outDir, "report.md"), "utf8");
+    expect(report).toContain("# trace-grab corpus report");
+    expect(report).toContain("Generated by @emet/trace-grab");
+    expect(report).toContain(`- Traces: ${traceCount}`);
+    expect(report).toContain(`- Records: ${rawRecords.length}`);
+    expect(report).toContain("- Dangling parents: 1");
+    expect(report).toContain("- Excluded traces: 0");
+    expect(report).toContain("## Pass-verbatim field inventory");
+    expect(report).toContain("issue #9");
   });
 });

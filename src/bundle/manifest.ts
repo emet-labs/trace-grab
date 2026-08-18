@@ -61,7 +61,12 @@ function collectTokens(value: unknown, tokens: Set<string>): void {
   for (const item of Object.values(value as Record<string, unknown>)) collectTokens(item, tokens);
 }
 
-export function buildManifest(records: CorpusRecord[], corpusBytes: Buffer): Manifest {
+/**
+ * Builds the bundle manifest. `corpusHash` is the SHA-256 hex digest computed
+ * while streaming `corpus.jsonl` — the writer feeds it in so the manifest
+ * never re-hashes or re-reads the corpus from disk.
+ */
+export function buildManifest(records: CorpusRecord[], corpusHash: string): Manifest {
   const idTokens = new Set(records.map((record) => record.id));
   const paths = new Set<string>();
   const tokens = new Set<string>();
@@ -91,7 +96,7 @@ export function buildManifest(records: CorpusRecord[], corpusBytes: Buffer): Man
       excluded_traces: 0,
     },
     policy_hash: createHash("sha256").update(BUILTIN_POLICY_DESCRIPTOR).digest("hex"),
-    corpus_sha256: createHash("sha256").update(corpusBytes).digest("hex"),
+    corpus_sha256: corpusHash,
     partner_label: null,
     warnings: [],
   };
