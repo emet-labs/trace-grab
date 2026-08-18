@@ -2,7 +2,7 @@
 
 import { writeBundle } from "./bundle/index.js";
 import { loadOrCreateSalt, sanitizeRecord } from "./sanitize/index.js";
-import { readGenericJsonl } from "./sources/index.js";
+import { looksLikeOtlp, readGenericJsonl, readOtlpJson } from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
 
@@ -20,13 +20,15 @@ function parseFlag(args: string[], flag: string): string | undefined {
 function grab(args: string[]): void {
   const [input] = args;
   const out = parseFlag(args, "--out");
+  const from = parseFlag(args, "--from");
   if (!input || !out) {
-    console.error("Usage: trace-grab grab <input> --out <dir>");
+    console.error("Usage: trace-grab grab <input> --out <dir> [--from otlp|jsonl]");
     process.exitCode = 1;
     return;
   }
 
-  const rawRecords = readGenericJsonl(input);
+  const useOtlp = from === "otlp" || (from === undefined && looksLikeOtlp(input));
+  const rawRecords = useOtlp ? readOtlpJson(input) : readGenericJsonl(input);
   const salt = loadOrCreateSalt();
   const corpusRecords = rawRecords.map((record) => sanitizeRecord(record, salt));
   writeBundle(out, corpusRecords);
