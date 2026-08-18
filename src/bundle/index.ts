@@ -69,7 +69,7 @@ function renderPlaintextSection(inventory: InventoryEntry[]): string {
       "",
       ...revealed.map(
         (entry) =>
-          `- \`${entry.path}\` — ${entry.occurrences} occurrence(s), example: \`${entry.example ?? ""}\``,
+          `- \`${entry.path}\` — ${entry.occurrences} occurrence(s), example: \`${(entry.example ?? "").replace(/\r?\n/g, " ")}\``,
       ),
       "",
       "Tool and span names, status, and typed fields (numbers, booleans, timestamps) also pass verbatim by default — see the path inventory below.",
@@ -118,27 +118,63 @@ function renderWarningsSection(manifest: Manifest, inventory: InventoryEntry[]):
   return ["## Warnings", "", body].join("\n");
 }
 
-/** Compact counts block — expanded into the full inventory table + integrity section next. */
-function renderCountsSummary(manifest: Manifest): string {
+/**
+ * Section 3 — the full path inventory. One row per `InventoryEntry` (sorted, as `entries()`
+ * returns): path · count · disposition · distinct values · example. Newlines collapse to spaces
+ * and pipes are escaped so a value can't break the table row. An empty inventory (zero-record
+ * corpus) renders an empty table with a placeholder rather than crashing (issue #9 AC #3).
+ */
+function renderInventorySection(inventory: InventoryEntry[]): string {
+  const rows = inventory.map((entry) => {
+    const path = entry.path.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+    const example =
+      entry.example === null
+        ? "—"
+        : `\`${entry.example.replace(/\r?\n/g, " ").replace(/\|/g, "\\|")}\``;
+    const distinct = `${entry.distinctValues}${entry.capped ? "+" : ""}`;
+    return `| \`${path}\` | ${entry.occurrences} | ${entry.disposition} | ${distinct} | ${example} |`;
+  });
   return [
-    "## Counts",
+    "## Path inventory",
     "",
-    `- Traces: ${manifest.counts.traces}`,
-    `- Records: ${manifest.counts.records}`,
-    `- Distinct dotted paths: ${manifest.counts.distinct_paths}`,
-    `- Distinct tokens: ${manifest.counts.distinct_tokens}`,
+    "One row per dotted path the sanitization walk visited. `[*]` collapses array elements; `distinct` is bounded by the cap (`+` means the path hit it, so some distinct values are not counted).",
+    "",
+    "| Path | Count | Disposition | Distinct | Example |",
+    "| --- | ---: | --- | ---: | --- |",
+    ...(rows.length > 0 ? rows : ["| _No paths — zero-record corpus._ | | | | |"]),
+  ].join("\n");
+}
+
+/** Section 4 — counts and integrity: records, traces, distinct paths/tokens, exclusions, corpus and policy hashes. */
+function renderCountsSection(manifest: Manifest): string {
+  const c = manifest.counts;
+  return [
+    "## Counts and integrity",
+    "",
+    `- Records: ${c.records}`,
+    `- Traces: ${c.traces}`,
+    `- Distinct dotted paths: ${c.distinct_paths}`,
+    `- Distinct tokens: ${c.distinct_tokens}`,
+    `- Dangling parents: ${c.dangling_parents}`,
+    `- Excluded traces: ${c.excluded_traces} (by window: ${c.excluded_by_window}, by limit: ${c.excluded_by_limit})`,
+    `- Corpus SHA-256: \`${manifest.corpus_sha256}\``,
+    `- Policy hash: \`${manifest.policy_hash}\``,
   ].join("\n");
 }
 
 /**
  * Renders `report.md` — a pure `(manifest, inventory) -> string` transform. Sections, in order:
- * header, (1) plaintext/reveal, (2) warnings, then a compact counts summary while the full
- * inventory table, integrity, transfer, and keymap/salt sections land in later commits.
+ * header, (1) plaintext/reveal, (2) warnings, (3) path inventory table, (4) counts and integrity.
+ * Transfer instructions and the keymap/salt note land in the next commit.
  */
 export function renderReport(manifest: Manifest, inventory: InventoryEntry[]): string {
-  return [renderHeader(manifest), renderPlaintextSection(inventory), renderWarningsSection(manifest, inventory), renderCountsSummary(manifest)].join(
-    "\n\n",
-  ) + "\n";
+  return [
+    renderHeader(manifest),
+    renderPlaintextSection(inventory),
+    renderWarningsSection(manifest, inventory),
+    renderInventorySection(inventory),
+    renderCountsSection(manifest),
+  ].join("\n\n") + "\n";
 }
 
 /**
