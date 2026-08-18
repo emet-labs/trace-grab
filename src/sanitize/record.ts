@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import type { CorpusRecord, JsonValue, Label, Link, RawRecord } from "../normalize/index.js";
 import { tokenize } from "./tokenize.js";
 import { PolicyResolver, type Disposition } from "./policy.js";
+import type { OnInventory } from "./inventory.js";
 
 /**
  * Path-aware sanitization walk. Applies a `PolicyResolver` at every node, falling back to the
@@ -67,17 +68,34 @@ function resolveString(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  onInventory?: OnInventory,
 ): string {
   const d = resolver.decide(path);
   switch (d) {
     case "reveal":
+      onInventory?.(path, "reveal", value);
       return value;
-    case "tokenize":
-      return tokenizeWithCallback(value, salt, onToken);
-    case "drop":
-      return tokenizeWithCallback(value, salt, onToken);
-    case "default":
-      return path in BUILTIN_PASS_VERBATIM ? value : tokenizeWithCallback(value, salt, onToken);
+    case "tokenize": {
+      const token = tokenizeWithCallback(value, salt, onToken);
+      onInventory?.(path, "tokenize", token);
+      return token;
+    }
+    case "drop": {
+      // Required field — can't remove, so fail closed to tokenize. The effective disposition
+      // applied to the value is `tokenize`, which is what the inventory records.
+      const token = tokenizeWithCallback(value, salt, onToken);
+      onInventory?.(path, "tokenize", token);
+      return token;
+    }
+    case "default": {
+      if (path in BUILTIN_PASS_VERBATIM) {
+        onInventory?.(path, "default", value);
+        return value;
+      }
+      const token = tokenizeWithCallback(value, salt, onToken);
+      onInventory?.(path, "default", token);
+      return token;
+    }
   }
 }
 
@@ -88,12 +106,25 @@ function resolveTimestamp(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  onInventory?: OnInventory,
 ): string {
   const d = resolver.decide(path);
-  if (d === "reveal") return value;
-  if (d === "tokenize" || d === "drop") return tokenizeWithCallback(value, salt, onToken);
+  if (d === "reveal") {
+    onInventory?.(path, "reveal", value);
+    return value;
+  }
+  if (d === "tokenize" || d === "drop") {
+    const token = tokenizeWithCallback(value, salt, onToken);
+    onInventory?.(path, "tokenize", token);
+    return token;
+  }
   // default
-  if (resolver.time === "shift") return shiftTimestamp(value, salt);
+  if (resolver.time === "shift") {
+    const shifted = shiftTimestamp(value, salt);
+    onInventory?.(path, "default", shifted);
+    return shifted;
+  }
+  onInventory?.(path, "default", value);
   return value;
 }
 
@@ -108,41 +139,83 @@ function sanitizeValue(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  onInventory?: OnInventory,
+  trail: Set<object> = new Set(),
 ): JsonValue | typeof DROP {
-  if (d === "drop") return DROP;
+  if (d === "drop") {
+    onInventory?.(path, "drop", null);
+    return DROP;
+  }
 
   // Leaf values: apply the disposition directly.
   if (typeof value === "string") {
-    if (d === "reveal") return value;
-    if (d === "default" && path in BUILTIN_PASS_VERBATIM) return value;
-    return tokenizeWithCallback(value, salt, onToken);
+    if (d === "reveal") {
+      onInventory?.(path, "reveal", value);
+      return value;
+    }
+    if (d === "default" && path in BUILTIN_PASS_VERBATIM) {
+      onInventory?.(path, "default", value);
+      return value;
+    }
+    const token = tokenizeWithCallback(value, salt, onToken);
+    // `d` is `tokenize` (explicit policy) or `default` (built-in string rule); the rendered
+    // example is the token the walk actually produced.
+    onInventory?.(path, d, token);
+    return token;
   }
-  if (value === null || typeof value !== "object") return value;
+  if (value === null || typeof value !== "object") {
+    // Pass-through primitive (number/boolean/null). Rendered example is the stringified value.
+    onInventory?.(path, d, value === null ? "null" : String(value));
+    return value;
+  }
 
-  // Containers: walk children. Each child resolves its own disposition via decide(childPath).
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeJsonValue(item, `${path}[*]`, resolver, salt, onToken))
-      .filter((v): v is JsonValue => v !== DROP);
+  // Cycle guard (issue #7, AC #1): an ancestor-trail of object identities. A cyclic `inputs`
+  // object would recurse forever; reject it with a path-naming error instead of hanging. The
+  // trail holds only ancestors (add before recursing, delete after), so a shared sub-object
+  // referenced from two sibling paths — a DAG, not a cycle — is still allowed.
+  if (trail.has(value)) {
+    throw new Error(`cycle detected at ${path}: circular object reference`);
   }
+  trail.add(value);
+  try {
+    // Containers: walk children. Each child resolves its own disposition via decide(childPath).
+    if (Array.isArray(value)) {
+      return value
+        .map((item) =>
+          sanitizeJsonValue(item, `${path}[*]`, resolver, salt, onToken, onInventory, trail),
+        )
+        .filter((v): v is JsonValue => v !== DROP);
+    }
 
-  const out: Record<string, JsonValue> = {};
-  for (const [key, item] of Object.entries(value)) {
-    const result = sanitizeJsonValue(item, `${path}.${key}`, resolver, salt, onToken);
-    if (result !== DROP) out[key] = result;
+    const out: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const result = sanitizeJsonValue(
+        item,
+        `${path}.${key}`,
+        resolver,
+        salt,
+        onToken,
+        onInventory,
+        trail,
+      );
+      if (result !== DROP) out[key] = result;
+    }
+    return out;
+  } finally {
+    trail.delete(value);
   }
-  return out;
 }
 
-/** Walk a JSON value at `path`. Returns `DROP` if the field should be removed. */
 function sanitizeJsonValue(
   value: JsonValue,
   path: string,
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  onInventory?: OnInventory,
+  trail: Set<object> = new Set(),
 ): JsonValue | typeof DROP {
-  return sanitizeValue(value, path, resolver.decide(path), resolver, salt, onToken);
+  return sanitizeValue(value, path, resolver.decide(path), resolver, salt, onToken, onInventory, trail);
 }
 
 /** Walk a required JSON value (inputs, outputs, label.value). `drop` → `default` (can't remove). */
@@ -152,9 +225,20 @@ function sanitizeRequiredValue(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  onInventory?: OnInventory,
+  trail: Set<object> = new Set(),
 ): JsonValue {
   const d = resolver.decide(path);
-  const result = sanitizeValue(value, path, d === "drop" ? "default" : d, resolver, salt, onToken);
+  const result = sanitizeValue(
+    value,
+    path,
+    d === "drop" ? "default" : d,
+    resolver,
+    salt,
+    onToken,
+    onInventory,
+    trail,
+  );
   return result === DROP ? value : result;
 }
 
@@ -165,31 +249,53 @@ function sanitizeBag(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  onInventory?: OnInventory,
+  trail: Set<object> = new Set(),
 ): Record<string, JsonValue> {
   const out: Record<string, JsonValue> = {};
   for (const [key, item] of Object.entries(bag)) {
-    const result = sanitizeJsonValue(item, `${pathPrefix}.${key}`, resolver, salt, onToken);
+    const result = sanitizeJsonValue(
+      item,
+      `${pathPrefix}.${key}`,
+      resolver,
+      salt,
+      onToken,
+      onInventory,
+      trail,
+    );
     if (result !== DROP) out[key] = result;
   }
   return out;
 }
 
-function sanitizeLabel(label: Label, resolver: PolicyResolver, salt: Buffer, onToken?: OnToken): Label {
+function sanitizeLabel(
+  label: Label,
+  resolver: PolicyResolver,
+  salt: Buffer,
+  onToken?: OnToken,
+  onInventory?: OnInventory,
+): Label {
   return {
-    key: resolveString(label.key, "labels[*].key", resolver, salt, onToken),
-    value: sanitizeRequiredValue(label.value, "labels[*].value", resolver, salt, onToken),
+    key: resolveString(label.key, "labels[*].key", resolver, salt, onToken, onInventory),
+    value: sanitizeRequiredValue(label.value, "labels[*].value", resolver, salt, onToken, onInventory),
     comment:
       label.comment === null
         ? null
-        : resolveString(label.comment, "labels[*].comment", resolver, salt, onToken),
+        : resolveString(label.comment, "labels[*].comment", resolver, salt, onToken, onInventory),
   };
 }
 
-function sanitizeLink(link: Link, resolver: PolicyResolver, salt: Buffer, onToken?: OnToken): Link {
+function sanitizeLink(
+  link: Link,
+  resolver: PolicyResolver,
+  salt: Buffer,
+  onToken?: OnToken,
+  onInventory?: OnInventory,
+): Link {
   return {
-    trace_id: resolveString(link.trace_id, "links[*].trace_id", resolver, salt, onToken),
-    span_id: resolveString(link.span_id, "links[*].span_id", resolver, salt, onToken),
-    attributes: sanitizeBag(link.attributes, "links[*].attributes", resolver, salt, onToken),
+    trace_id: resolveString(link.trace_id, "links[*].trace_id", resolver, salt, onToken, onInventory),
+    span_id: resolveString(link.span_id, "links[*].span_id", resolver, salt, onToken, onInventory),
+    attributes: sanitizeBag(link.attributes, "links[*].attributes", resolver, salt, onToken, onInventory),
   };
 }
 
@@ -202,38 +308,55 @@ function sanitizeLink(link: Link, resolver: PolicyResolver, salt: Buffer, onToke
  * tokenizes, so the `grab` flow can populate the local reverse keymap without making this function
  * impure: the returned `CorpusRecord` is identical whether or not `onToken` is supplied. Omitting it
  * (the `check` flow and every test) keeps behaviour byte-identical to a no-keymap run.
+ *
+ * The optional `onInventory` side-channel (issue #7) announces every leaf decision the walk makes
+ * — `(path, disposition, renderedExample)` — so a {@link PathInventory} can accumulate per-path
+ * stats. It mirrors `onToken`: the returned `CorpusRecord` is byte-identical whether or not an
+ * inventory is attached, so the inventory is a pure observer of decisions already made.
  */
 export function sanitizeRecord(
   record: RawRecord,
   salt: Buffer,
   resolver: PolicyResolver = new PolicyResolver(),
   onToken?: OnToken,
+  onInventory?: OnInventory,
 ): CorpusRecord {
+  // `status` is an enum that always passes verbatim (POLICY.md: not droppable, not free text).
+  // It is intentionally NOT routed through `resolveString` (which would fail-close to tokenize on
+  // a `drop` policy); the direct assignment enforces "always pass." Announce the decision to the
+  // inventory observer so the path set is complete — disposition `default`, example = real value,
+  // mirroring `resolveString`'s builtin pass-verbatim recording for `name`/`kind`.
+  onInventory?.("status", "default", record.status);
   return {
-    id: resolveString(record.id, "id", resolver, salt, onToken),
-    trace_id: resolveString(record.trace_id, "trace_id", resolver, salt, onToken),
+    id: resolveString(record.id, "id", resolver, salt, onToken, onInventory),
+    trace_id: resolveString(record.trace_id, "trace_id", resolver, salt, onToken, onInventory),
     parent_id:
       record.parent_id === null
         ? null
-        : resolveString(record.parent_id, "parent_id", resolver, salt, onToken),
-    name: resolveString(record.name, "name", resolver, salt, onToken),
-    kind: resolveString(record.kind, "kind", resolver, salt, onToken),
-    start: resolveTimestamp(record.start, "start", resolver, salt, onToken),
-    end: record.end === null ? null : resolveTimestamp(record.end, "end", resolver, salt, onToken),
+        : resolveString(record.parent_id, "parent_id", resolver, salt, onToken, onInventory),
+    name: resolveString(record.name, "name", resolver, salt, onToken, onInventory),
+    kind: resolveString(record.kind, "kind", resolver, salt, onToken, onInventory),
+    start: resolveTimestamp(record.start, "start", resolver, salt, onToken, onInventory),
+    end:
+      record.end === null
+        ? null
+        : resolveTimestamp(record.end, "end", resolver, salt, onToken, onInventory),
     status: record.status,
     error:
       record.error === null
         ? null
         : {
-            kind: resolveString(record.error.kind, "error.kind", resolver, salt, onToken),
-            message: resolveString(record.error.message, "error.message", resolver, salt, onToken),
+            kind: resolveString(record.error.kind, "error.kind", resolver, salt, onToken, onInventory),
+            message: resolveString(record.error.message, "error.message", resolver, salt, onToken, onInventory),
           },
-    inputs: sanitizeRequiredValue(record.inputs, "inputs", resolver, salt, onToken),
-    outputs: sanitizeRequiredValue(record.outputs, "outputs", resolver, salt, onToken),
-    attributes: sanitizeBag(record.attributes, "attributes", resolver, salt, onToken),
-    labels: record.labels.map((label) => sanitizeLabel(label, resolver, salt, onToken)),
-    links: record.links.map((link) => sanitizeLink(link, resolver, salt, onToken)),
-    unmapped: sanitizeBag(record.unmapped, "unmapped", resolver, salt, onToken),
-    source: { vendor: resolveString(record.source.vendor, "source.vendor", resolver, salt, onToken) },
+    inputs: sanitizeRequiredValue(record.inputs, "inputs", resolver, salt, onToken, onInventory),
+    outputs: sanitizeRequiredValue(record.outputs, "outputs", resolver, salt, onToken, onInventory),
+    attributes: sanitizeBag(record.attributes, "attributes", resolver, salt, onToken, onInventory),
+    labels: record.labels.map((label) => sanitizeLabel(label, resolver, salt, onToken, onInventory)),
+    links: record.links.map((link) => sanitizeLink(link, resolver, salt, onToken, onInventory)),
+    unmapped: sanitizeBag(record.unmapped, "unmapped", resolver, salt, onToken, onInventory),
+    source: {
+      vendor: resolveString(record.source.vendor, "source.vendor", resolver, salt, onToken, onInventory),
+    },
   };
 }
