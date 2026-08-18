@@ -3,6 +3,7 @@ import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CorpusRecord } from "../normalize/index.js";
+import type { InventoryEntry } from "../sanitize/inventory.js";
 import { buildManifest, type Manifest } from "./manifest.js";
 import { stableStringify } from "./stable-stringify.js";
 
@@ -43,7 +44,7 @@ const PASS_VERBATIM_INVENTORY = [
   "source.vendor",
 ];
 
-function renderReport(manifest: Manifest): string {
+function renderReport(manifest: Manifest, inventory: InventoryEntry[]): string {
   const lines: string[] = [
     `# trace-grab corpus report`,
     ``,
@@ -86,6 +87,8 @@ export interface BundleOptions {
   policyHash?: string;
   /** Warnings to surface in the manifest (unmatched-rule warnings from the resolver). */
   warnings?: string[];
+  /** Path inventory snapshot (`PathInventory.entries()`) — feeds the report's inventory table. */
+  inventory?: InventoryEntry[];
 }
 
 export async function writeBundle(
@@ -128,5 +131,5 @@ export async function writeBundle(
   );
   writeFileSync(join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(outDir, "policy.yaml"), options?.policyYaml ?? DEFAULT_POLICY_YAML);
-  writeFileSync(join(outDir, "report.md"), renderReport(manifest));
+  writeFileSync(join(outDir, "report.md"), renderReport(manifest, options?.inventory ?? []));
 }
