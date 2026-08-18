@@ -2,10 +2,50 @@ import { describe, expect, test } from "bun:test";
 
 import type { RawRecord } from "../src/normalize/index.js";
 import { PathInventory, type OnInventory } from "../src/sanitize/inventory.js";
+import { PolicyResolver } from "../src/sanitize/policy.js";
 import { sanitizeRecord } from "../src/sanitize/record.js";
+import { tokenize } from "../src/sanitize/tokenize.js";
 
 /** Fixed 32-byte test salt — deterministic so assertions are stable (ADR-0006). */
 const SALT = Buffer.alloc(32, 7);
+
+/** Object keys of `v` when it is a plain object, else `[]` — a no-cast read of a JsonValue. */
+function keysOf(v: unknown): string[] {
+  return v !== null && typeof v === "object" && !Array.isArray(v)
+    ? Object.keys(v as Record<string, unknown>)
+    : [];
+}
+
+/** The string at `key` of a plain-object `v`, else `undefined` — narrows before access. */
+function fieldOf(v: unknown, key: string): unknown {
+  if (v !== null && typeof v === "object" && !Array.isArray(v) && key in v) {
+    return (v as Record<string, unknown>)[key];
+  }
+  return undefined;
+}
+
+/** A minimal valid RawRecord with the given `inputs` value (and absolute-time defaults). */
+function recordWith(inputs: unknown, overrides: Partial<RawRecord> = {}): RawRecord {
+  return {
+    id: "span-x",
+    trace_id: "trace-x",
+    parent_id: null,
+    name: "probe",
+    kind: "tool",
+    start: "2026-08-01T14:03:22.104Z",
+    end: "2026-08-01T14:03:22.481Z",
+    status: "ok",
+    error: null,
+    inputs: inputs as RawRecord["inputs"],
+    outputs: {},
+    attributes: {},
+    labels: [],
+    links: [],
+    unmapped: {},
+    source: { vendor: "langsmith" },
+    ...overrides,
+  };
+}
 
 describe("issue #7: sanitization walk and path inventory", () => {
   describe("PathInventory accumulator", () => {
@@ -99,28 +139,6 @@ describe("issue #7: sanitization walk and path inventory", () => {
   });
 
   describe("cycle detection (AC #1)", () => {
-    /** A minimal valid RawRecord with the given `inputs` value. */
-    function recordWith(inputs: unknown): RawRecord {
-      return {
-        id: "span-1",
-        trace_id: "trace-1",
-        parent_id: null,
-        name: "cycle_probe",
-        kind: "tool",
-        start: "2026-08-01T14:03:22.104Z",
-        end: "2026-08-01T14:03:22.481Z",
-        status: "ok",
-        error: null,
-        inputs: inputs as RawRecord["inputs"],
-        outputs: {},
-        attributes: {},
-        labels: [],
-        links: [],
-        unmapped: {},
-        source: { vendor: "langsmith" },
-      };
-    }
-
     test("a cyclic object in inputs is rejected with a path-naming error, not a hang", () => {
       const a: Record<string, unknown> = {};
       const b: Record<string, unknown> = { c: a };
@@ -138,11 +156,89 @@ describe("issue #7: sanitization walk and path inventory", () => {
       // A DAG is not a cycle: the same object at two paths must not trip the guard.
       const shared = { v: "x" };
       const out = sanitizeRecord(recordWith({ a: shared, b: shared }), SALT);
-      const inputs = out.inputs;
-      expect(inputs && typeof inputs === "object" && !Array.isArray(inputs)).toBe(true);
-      const bag = inputs as Record<string, { v: string }>;
-      expect(bag.a.v).toMatch(/^TOK_/);
-      expect(bag.b.v).toMatch(/^TOK_/);
+      // `v` is a default-tokenized string leaf — both sibling references resolve to the same token.
+      const aField = fieldOf(out.inputs, "a");
+      const bField = fieldOf(out.inputs, "b");
+      expect(fieldOf(aField, "v")).toMatch(/^TOK_/);
+      expect(fieldOf(bField, "v")).toMatch(/^TOK_/);
+    });
+  });
+
+  describe("path inventory wiring (AC #2, #3, accumulation correctness)", () => {
+    test("a dropped subtree removes the key, not just the value (AC #2)", () => {
+      const resolver = new PolicyResolver({
+        reveal: [],
+        tokenize: [],
+        drop: ["inputs.secret"],
+        time: "absolute",
+      });
+      const out = sanitizeRecord(
+        recordWith({ user_id: "u_1", secret: { token: "leak", nested: { deep: "x" } } }),
+        SALT,
+        resolver,
+ );
+      // The `secret` key is gone entirely — not null, not an empty object, not present.
+      expect(keysOf(out.inputs)).not.toContain("secret");
+      // A sibling field at the same level survives and is tokenized (default string rule).
+      expect(keysOf(out.inputs)).toContain("user_id");
+      expect(fieldOf(out.inputs, "user_id")).toMatch(/^TOK_/);
+    });
+
+    test("10k-element array inventory stays bounded — one collapsed path, 10000 occurrences (AC #3)", () => {
+      const inv = new PathInventory();
+      const items = Array.from({ length: 10000 }, () => ({ sku: "x" }));
+      sanitizeRecord(recordWith({ items }), SALT, new PolicyResolver(), undefined, inv.callback());
+
+      // Array collapse: every element shares the path `inputs.items[*].sku` — one entry, not 10k.
+      const sku = inv.get("inputs.items[*].sku")!;
+      expect(sku.occurrences).toBe(10000);
+      expect(sku.distinctValues).toBe(1); // all "x" → one token → one distinct value
+      expect(sku.capped).toBe(false);
+      // Total path count is bounded by the schema's leaf count, not by array length.
+      expect(inv.size()).toBeLessThan(50);
+      // No per-element path leaked through the collapse.
+      expect(inv.get("inputs.items[*].sku")!.path).toBe("inputs.items[*].sku");
+    });
+
+    test("inventory accumulation correctness — real value for reveal, token for default-tokenize", () => {
+      const resolver = new PolicyResolver({
+        reveal: ["inputs.user_id"],
+        tokenize: [],
+        drop: [],
+        time: "absolute",
+      });
+      const inv = new PathInventory();
+      const out = sanitizeRecord(
+        recordWith({ user_id: "u_48213", session_token: "sess_9f2a7c1e" }),
+        SALT,
+        resolver,
+        undefined,
+        inv.callback(),
+      );
+
+      // Reveal field: disposition `reveal`, example is the real (un-tokenized) value, and the
+      // output carries that same real value verbatim.
+      const uid = inv.get("inputs.user_id")!;
+      expect(uid.disposition).toBe("reveal");
+      expect(uid.example).toBe("u_48213");
+      expect(uid.occurrences).toBe(1);
+      expect(fieldOf(out.inputs, "user_id")).toBe("u_48213");
+
+      // Default-tokenized field: disposition `default`, example is the token the walk produced.
+      const tok = inv.get("inputs.session_token")!;
+      expect(tok.disposition).toBe("default");
+      expect(tok.example).toBe(tokenize("sess_9f2a7c1e", SALT));
+      expect(fieldOf(out.inputs, "session_token")).toBe(tokenize("sess_9f2a7c1e", SALT));
+
+      // Pass-verbatim top-level field: disposition `default`, example is the real value.
+      const name = inv.get("name")!;
+      expect(name.disposition).toBe("default");
+      expect(name.example).toBe("probe");
+
+      // Top-level tokenized id: disposition `default`, example is the token.
+      const id = inv.get("id")!;
+      expect(id.disposition).toBe("default");
+      expect(id.example).toBe(tokenize("span-x", SALT));
     });
   });
 });

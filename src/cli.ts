@@ -9,6 +9,7 @@ import { writeBundle } from "./bundle/index.js";
 import { limitTraces } from "./limit/index.js";
 import type { RawRecord } from "./normalize/index.js";
 import {
+  PathInventory,
   PolicyError,
   PolicyResolver,
   Keymap,
@@ -173,7 +174,15 @@ async function grab(args: string[]): Promise<void> {
   const keymapPath = join(root, ".trace-grab", "keymap.jsonl");
   const keymap = noKeymap ? undefined : Keymap.open(keymapPath);
   const onToken = keymap?.callback();
-  const corpusRecords = kept.map((record) => sanitizeRecord(record, salt, resolver, onToken));
+  // Per-path inventory (issue #7): a pure observer of the walk's leaf decisions. The manifest's
+  // `collectPaths`/`collectTokens` corpus-wide pass is unchanged; wiring this inventory into
+  // `report.md` is deferred to a later issue, so the accumulator is built and attached now but
+  // not yet surfaced in the bundle output.
+  const inventory = new PathInventory();
+  const onInventory = inventory.callback();
+  const corpusRecords = kept.map((record) =>
+    sanitizeRecord(record, salt, resolver, onToken, onInventory),
+  );
 
   const warnings = resolver.unmatchedWarnings();
   const policyYaml = existsSync(effectivePolicyPath) ? readFileSync(effectivePolicyPath, "utf8") : undefined;
