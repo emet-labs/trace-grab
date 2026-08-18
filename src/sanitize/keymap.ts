@@ -34,6 +34,9 @@ export class Keymap {
   static open(path: string): Keymap {
     const existing = new Set<string>();
     if (existsSync(path)) {
+      // Re-assert 0600 in case an external process or prior bug loosened the mode — the keymap
+      // holds plaintext values, so its permissions must never drift (ADR-0006).
+      chmodSync(path, 0o600);
       for (const line of readFileSync(path, "utf8").split("\n")) {
         const trimmed = line.trim();
         if (trimmed.length === 0) continue;

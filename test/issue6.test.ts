@@ -67,7 +67,6 @@ describe("issue #6: tokenizer, salt lifecycle, keymap", () => {
     test("the domain separator is baked into the token (cross-scheme isolation)", () => {
       // token(v) = TOK_ + hmac(salt, "trace-corpus-v1:" + v).hex[0:10] (ADR-0006).
       // A bare hmac over the value (no separator) must differ.
-      const { createHmac } = require("node:crypto") as typeof import("node:crypto");
       const salt = Buffer.alloc(32, 7);
       const value = "isolated-value";
       const expectedHex = createHmac("sha256", salt).update("trace-corpus-v1:" + value, "utf8").digest("hex");
@@ -216,7 +215,10 @@ describe("issue #6: tokenizer, salt lifecycle, keymap", () => {
 
       // loadSalt honours --salt-file: the in-process API agrees with the on-disk salt.
       expect(loadSalt(workDir, customSalt).equals(salt)).toBe(true);
-      loadOrCreateSaltWithMeta(workDir, customSalt); // idempotent — must not report created here.
+      // loadOrCreateSaltWithMeta is idempotent: an existing salt is read, not re-minted.
+      const reopen = loadOrCreateSaltWithMeta(workDir, customSalt);
+      expect(reopen.created).toBe(false);
+      expect(reopen.salt.equals(salt)).toBe(true);
 
       // The CLI check path with --salt-file finds the token (0 plaintext hits — it was tokenized).
       const outcome = await check(["--value", FIRST_ID, outDir, "--salt-file", customSalt], workDir);
