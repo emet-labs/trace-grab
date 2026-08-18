@@ -74,16 +74,26 @@ function renderReport(manifest: Manifest): string {
  * Streams `corpus.jsonl` one record at a time, feeding each line into a running
  * SHA-256 hash. Never holds the full corpus in memory — each record is serialized,
  * hashed, and written before the next is touched. After streaming, writes
- * `manifest.json`, `policy.yaml` (materialized default policy), and `report.md`
- * (structural skeleton — full rendering is issue #9). `excludedByLimit` and
- * `excludedByWindow` carry the whole-trace exclusion counts from limiting
- * (ADR-0011) into the manifest.
+ * `manifest.json`, `policy.yaml` (the effective policy — user's `tracegrab.yaml`
+ * verbatim, or the materialized default), and `report.md` (structural skeleton —
+ * full rendering is issue #9). `excludedByLimit` and `excludedByWindow` carry the
+ * whole-trace exclusion counts from limiting (ADR-0011) into the manifest.
  */
+export interface BundleOptions {
+  /** The effective policy YAML to write as `policy.yaml`. Defaults to the built-in policy. */
+  policyYaml?: string;
+  /** SHA-256 of the effective policy. Defaults to the built-in descriptor hash. */
+  policyHash?: string;
+  /** Warnings to surface in the manifest (unmatched-rule warnings from the resolver). */
+  warnings?: string[];
+}
+
 export async function writeBundle(
   outDir: string,
   records: CorpusRecord[],
   excludedByLimit = 0,
   excludedByWindow = 0,
+  options?: BundleOptions,
 ): Promise<void> {
   mkdirSync(outDir, { recursive: true });
 
@@ -108,8 +118,15 @@ export async function writeBundle(
   });
 
   const corpusHash = hash.digest("hex");
-  const manifest = buildManifest(records, corpusHash, excludedByLimit, excludedByWindow);
+  const manifest = buildManifest(
+    records,
+    corpusHash,
+    excludedByLimit,
+    excludedByWindow,
+    options?.policyHash,
+    options?.warnings,
+  );
   writeFileSync(join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-  writeFileSync(join(outDir, "policy.yaml"), DEFAULT_POLICY_YAML);
+  writeFileSync(join(outDir, "policy.yaml"), options?.policyYaml ?? DEFAULT_POLICY_YAML);
   writeFileSync(join(outDir, "report.md"), renderReport(manifest));
 }

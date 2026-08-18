@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { statSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { createHash } from "node:crypto";
 import { checkValue, type CheckResult } from "./check/index.js";
 import { writeBundle } from "./bundle/index.js";
 import { limitTraces } from "./limit/index.js";
 import type { RawRecord } from "./normalize/index.js";
-import { loadOrCreateSalt, loadSalt, sanitizeRecord } from "./sanitize/index.js";
+import { PolicyError, PolicyResolver, loadPolicy, loadOrCreateSalt, loadSalt, sanitizeRecord } from "./sanitize/index.js";
 import { looksLikeOtlp, readGenericJsonl, readLangSmithExport, readOtlpJson } from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
@@ -15,7 +16,7 @@ const USAGE = `Usage: trace-grab <command> [options]
 Commands:
   grab <input> --out <dir>   Read, normalize, sanitize, and write a bundle
     [--from langsmith|otlp|generic]
-    [--since <iso>] [--until <iso>] [--max-traces <n>]
+    [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>]
   check --value <v> <bundle-dir>  Locate a value's token and any plaintext hits
 
 Run 'trace-grab <command> --help' for command-specific options.`;
@@ -81,16 +82,18 @@ async function grab(args: string[]): Promise<void> {
   const since = parseFlag(args, "--since");
   const until = parseFlag(args, "--until");
   const maxTracesRaw = parseFlag(args, "--max-traces");
+  const policyPath = parseFlag(args, "--policy");
 
   let positional = dropFlag(args, "--from");
   positional = dropFlag(positional, "--since");
   positional = dropFlag(positional, "--until");
   positional = dropFlag(positional, "--max-traces");
+  positional = dropFlag(positional, "--policy");
   const [input] = positional;
   const out = parseFlag(positional, "--out");
   if (!input || !out) {
     console.error(
-      "Usage: trace-grab grab <input> --out <dir> [--from langsmith|otlp|generic] [--since <iso>] [--until <iso>] [--max-traces <n>]",
+      "Usage: trace-grab grab <input> --out <dir> [--from langsmith|otlp|generic] [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>]",
     );
     process.exitCode = 1;
     return;
@@ -116,12 +119,31 @@ async function grab(args: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  // Load the policy file before touching the corpus — a parse error exits non-zero and
+  // changes nothing (ADR-0009: a typo'd key in a security config must never fail open).
+  const effectivePolicyPath = policyPath ?? "tracegrab.yaml";
+  let policy;
+  try {
+    policy = loadPolicy(effectivePolicyPath);
+  } catch (e) {
+    if (e instanceof PolicyError) {
+      console.error(`error: ${e.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw e;
+  }
+  const resolver = new PolicyResolver(policy);
 
   const rawRecords = readInput(input, from);
   const { kept, excludedByWindow, excludedByLimit } = limitTraces(rawRecords, { since, until, maxTraces });
   const salt = loadOrCreateSalt();
-  const corpusRecords = kept.map((record) => sanitizeRecord(record, salt));
-  await writeBundle(out, corpusRecords, excludedByLimit, excludedByWindow);
+  const corpusRecords = kept.map((record) => sanitizeRecord(record, salt, resolver));
+
+  const warnings = resolver.unmatchedWarnings();
+  const policyYaml = existsSync(effectivePolicyPath) ? readFileSync(effectivePolicyPath, "utf8") : undefined;
+  const policyHash = policyYaml !== undefined ? createHash("sha256").update(policyYaml).digest("hex") : undefined;
+  await writeBundle(out, corpusRecords, excludedByLimit, excludedByWindow, { policyYaml, policyHash, warnings });
 
   console.log(
     `Wrote ${corpusRecords.length} record(s) to ${out}` +

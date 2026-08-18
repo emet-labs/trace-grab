@@ -8,7 +8,7 @@ const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.ur
   version: string;
 };
 
-/** No policy file support yet (issue #3) — the manifest hashes this fixed built-in descriptor. */
+/** Hashed when no policy file was supplied — the materialized default policy descriptor. */
 const BUILTIN_POLICY_DESCRIPTOR = "trace-grab/builtin-defaults/v1";
 
 const TOKEN_PATTERN = /^TOK_[0-9a-f]{10}$/;
@@ -76,6 +76,8 @@ export function buildManifest(
   corpusHash: string,
   excludedByLimit = 0,
   excludedByWindow = 0,
+  policyHash?: string,
+  warnings?: string[],
 ): Manifest {
   const idTokens = new Set(records.map((record) => record.id));
   const paths = new Set<string>();
@@ -107,9 +109,9 @@ export function buildManifest(
       excluded_by_limit: excludedByLimit,
       excluded_by_window: excludedByWindow,
     },
-    policy_hash: createHash("sha256").update(BUILTIN_POLICY_DESCRIPTOR).digest("hex"),
+    policy_hash: policyHash ?? createHash("sha256").update(BUILTIN_POLICY_DESCRIPTOR).digest("hex"),
     corpus_sha256: corpusHash,
     partner_label: null,
-    warnings: [],
+    warnings: warnings ?? [],
   };
 }
