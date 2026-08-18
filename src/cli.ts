@@ -17,7 +17,7 @@ function parseFlag(args: string[], flag: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
-function grab(args: string[]): void {
+async function grab(args: string[]): Promise<void> {
   const [input] = args;
   const out = parseFlag(args, "--out");
   if (!input || !out) {
@@ -29,7 +29,7 @@ function grab(args: string[]): void {
   const rawRecords = readGenericJsonl(input);
   const salt = loadOrCreateSalt();
   const corpusRecords = rawRecords.map((record) => sanitizeRecord(record, salt));
-  writeBundle(out, corpusRecords);
+  await writeBundle(out, corpusRecords);
 
   console.log(`Wrote ${corpusRecords.length} record(s) to ${out}`);
 }
@@ -39,7 +39,10 @@ function main(argv: string[]): void {
 
   switch (command) {
     case "grab":
-      grab(rest);
+      void grab(rest).catch((error) => {
+        console.error(error);
+        process.exitCode = 1;
+      });
       return;
     case "check":
       throw new Error(`'${command}' is not yet implemented`);
