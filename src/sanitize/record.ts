@@ -108,6 +108,7 @@ function sanitizeValue(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  trail: Set<object> = new Set(),
 ): JsonValue | typeof DROP {
   if (d === "drop") return DROP;
 
@@ -119,30 +120,42 @@ function sanitizeValue(
   }
   if (value === null || typeof value !== "object") return value;
 
-  // Containers: walk children. Each child resolves its own disposition via decide(childPath).
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeJsonValue(item, `${path}[*]`, resolver, salt, onToken))
-      .filter((v): v is JsonValue => v !== DROP);
+  // Cycle guard (issue #7, AC #1): an ancestor-trail of object identities. A cyclic `inputs`
+  // object would recurse forever; reject it with a path-naming error instead of hanging. The
+  // trail holds only ancestors (add before recursing, delete after), so a shared sub-object
+  // referenced from two sibling paths — a DAG, not a cycle — is still allowed.
+  if (trail.has(value)) {
+    throw new Error(`cycle detected at ${path}: circular object reference`);
   }
+  trail.add(value);
+  try {
+    // Containers: walk children. Each child resolves its own disposition via decide(childPath).
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => sanitizeJsonValue(item, `${path}[*]`, resolver, salt, onToken, trail))
+        .filter((v): v is JsonValue => v !== DROP);
+    }
 
-  const out: Record<string, JsonValue> = {};
-  for (const [key, item] of Object.entries(value)) {
-    const result = sanitizeJsonValue(item, `${path}.${key}`, resolver, salt, onToken);
-    if (result !== DROP) out[key] = result;
+    const out: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const result = sanitizeJsonValue(item, `${path}.${key}`, resolver, salt, onToken, trail);
+      if (result !== DROP) out[key] = result;
+    }
+    return out;
+  } finally {
+    trail.delete(value);
   }
-  return out;
 }
 
-/** Walk a JSON value at `path`. Returns `DROP` if the field should be removed. */
 function sanitizeJsonValue(
   value: JsonValue,
   path: string,
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  trail: Set<object> = new Set(),
 ): JsonValue | typeof DROP {
-  return sanitizeValue(value, path, resolver.decide(path), resolver, salt, onToken);
+  return sanitizeValue(value, path, resolver.decide(path), resolver, salt, onToken, trail);
 }
 
 /** Walk a required JSON value (inputs, outputs, label.value). `drop` → `default` (can't remove). */
@@ -152,12 +165,20 @@ function sanitizeRequiredValue(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  trail: Set<object> = new Set(),
 ): JsonValue {
   const d = resolver.decide(path);
-  const result = sanitizeValue(value, path, d === "drop" ? "default" : d, resolver, salt, onToken);
+  const result = sanitizeValue(
+    value,
+    path,
+    d === "drop" ? "default" : d,
+    resolver,
+    salt,
+    onToken,
+    trail,
+  );
   return result === DROP ? value : result;
 }
-
 /** Walk a bag (attributes, unmapped, link.attributes). Individual keys can be dropped. */
 function sanitizeBag(
   bag: Record<string, JsonValue>,
@@ -165,10 +186,11 @@ function sanitizeBag(
   resolver: PolicyResolver,
   salt: Buffer,
   onToken?: OnToken,
+  trail: Set<object> = new Set(),
 ): Record<string, JsonValue> {
   const out: Record<string, JsonValue> = {};
   for (const [key, item] of Object.entries(bag)) {
-    const result = sanitizeJsonValue(item, `${pathPrefix}.${key}`, resolver, salt, onToken);
+    const result = sanitizeJsonValue(item, `${pathPrefix}.${key}`, resolver, salt, onToken, trail);
     if (result !== DROP) out[key] = result;
   }
   return out;

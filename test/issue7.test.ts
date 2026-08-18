@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import type { RawRecord } from "../src/normalize/index.js";
 import { PathInventory, type OnInventory } from "../src/sanitize/inventory.js";
+import { sanitizeRecord } from "../src/sanitize/record.js";
 
 /** Fixed 32-byte test salt — deterministic so assertions are stable (ADR-0006). */
 const SALT = Buffer.alloc(32, 7);
@@ -93,6 +95,54 @@ describe("issue #7: sanitization walk and path inventory", () => {
         b("p", "tokenize", v);
       }
       expect(inv1.get("p")).toEqual(inv2.get("p"));
+    });
+  });
+
+  describe("cycle detection (AC #1)", () => {
+    /** A minimal valid RawRecord with the given `inputs` value. */
+    function recordWith(inputs: unknown): RawRecord {
+      return {
+        id: "span-1",
+        trace_id: "trace-1",
+        parent_id: null,
+        name: "cycle_probe",
+        kind: "tool",
+        start: "2026-08-01T14:03:22.104Z",
+        end: "2026-08-01T14:03:22.481Z",
+        status: "ok",
+        error: null,
+        inputs: inputs as RawRecord["inputs"],
+        outputs: {},
+        attributes: {},
+        labels: [],
+        links: [],
+        unmapped: {},
+        source: { vendor: "langsmith" },
+      };
+    }
+
+    test("a cyclic object in inputs is rejected with a path-naming error, not a hang", () => {
+      const a: Record<string, unknown> = {};
+      const b: Record<string, unknown> = { c: a };
+      a.b = b; // a → b → c → a: a cycle through `inputs.a.b.c`.
+      expect(() => sanitizeRecord(recordWith(a), SALT)).toThrow(/cyc/i);
+    });
+
+    test("a self-referential array element is rejected too", () => {
+      const arr: unknown[] = [];
+      arr.push(arr); // element contains its own container — a cycle through `inputs[*]`.
+      expect(() => sanitizeRecord(recordWith(arr), SALT)).toThrow(/cyc/i);
+    });
+
+    test("a shared (non-cyclic) sub-object referenced from two siblings is allowed", () => {
+      // A DAG is not a cycle: the same object at two paths must not trip the guard.
+      const shared = { v: "x" };
+      const out = sanitizeRecord(recordWith({ a: shared, b: shared }), SALT);
+      const inputs = out.inputs;
+      expect(inputs && typeof inputs === "object" && !Array.isArray(inputs)).toBe(true);
+      const bag = inputs as Record<string, { v: string }>;
+      expect(bag.a.v).toMatch(/^TOK_/);
+      expect(bag.b.v).toMatch(/^TOK_/);
     });
   });
 });
