@@ -36,9 +36,11 @@ Each claim is something to verify, not a promise.
 | No Bun-specific API in shipped `src/` — runs under plain Node ≥ 20 | `bun test test/no-egress.test.ts` |
 | The corpus leaves your machine only when you send it | there is no upload command; see *Transfer* below |
 
-Provenance for the published package — build attestations tied to this repo — is a release gate
-that is not yet live ([#18](https://github.com/emet-labs/trace-grab/issues/18)). Until it ships,
-install from source or build the tarball yourself with `npm pack`.
+The published package carries SLSA provenance — a build attestation tying the tarball to a commit and
+a workflow run in this repo, signed via sigstore. Verify the "Provenance" badge on the
+[npm package page](https://www.npmjs.com/package/@emetlabs/trace-grab) or the entry in the
+[sigstore transparency log](https://search.sigstore.dev). Publishing uses GitHub OIDC trusted
+publishing — no npm access token is stored or used, so there is no secret to rotate or leak.
 
 ## Deny by default, equality preserved
 
