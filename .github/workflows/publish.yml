@@ -1,12 +1,14 @@
 name: publish
 
-# Continuous deployment for the npm package.
-# Fires when a version tag `v*` is pushed (e.g. `git tag v0.1.1 && git push origin v0.1.1`)
-# or on manual dispatch. Publishes to the `@emetlabs` scope with npm provenance
-# (SLSA build attestations tied to this workflow run + commit).
+# Continuous deployment: publishes @emetlabs/trace-grab to npm via OIDC
+# trusted publishing (no npm token secret — npm mints the publish credential
+# from GitHub's OIDC token, once this repo+workflow are registered as a
+# trusted publisher on npmjs.com) with SLSA provenance, then cuts a GitHub
+# Release with the published tarball attached.
 #
-# Re-publishing an existing version fails (npm rejects it), so bump `version`
-# in package.json before tagging. Do not retag a released version.
+# Trigger: push a version tag `v*` (e.g. `git tag v0.1.1 && git push origin v0.1.1`)
+# or manual dispatch. Bump `version` in package.json before tagging — npm rejects
+# re-publishing an existing version. Do not retag a released version.
 
 on:
   push:
@@ -15,32 +17,33 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # to create the GitHub Release
-  id-token: write # required to mint the OIDC token for npm provenance
+  contents: write # create the GitHub Release
+  id-token: write # OIDC for npm trusted publishing + provenance
 
 jobs:
   publish:
     runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: oven-sh/setup-bun@v2
 
-      - run: bun install
+      - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun test
 
-      # npm (not bun) is required: provenance is an npm feature.
-      - uses: actions/setup-node@v4
+      # npm (not bun) is required: trusted publishing + provenance are npm
+      # features. setup-node@v6 with registry-url and no NODE_AUTH_TOKEN lets
+      # `npm publish` authenticate via the GitHub OIDC token exchange.
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: "24"
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false # never cache in release builds
 
       - name: Publish with provenance
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+        run: npm publish --provenance
 
       - name: Pack tarball for release asset
         run: npm pack
