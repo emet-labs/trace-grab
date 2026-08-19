@@ -44,6 +44,10 @@ const PASS_VERBATIM_INVENTORY = [
   "source.vendor",
 ];
 
+/** Collapse newlines to spaces and escape backticks so a value can't break an inline-code span. */
+function escapeInline(value: string): string {
+  return value.replace(/\r?\n/g, " ").replace(/`/g, "\\`");
+}
 /** Report header: title, generator/version/timestamp, source vendor. */
 function renderHeader(manifest: Manifest): string {
   return [
@@ -69,7 +73,7 @@ function renderPlaintextSection(inventory: InventoryEntry[]): string {
       "",
       ...revealed.map(
         (entry) =>
-          `- \`${entry.path}\` — ${entry.occurrences} occurrence(s), example: \`${(entry.example ?? "").replace(/\r?\n/g, " ")}\``,
+          `- \`${entry.path}\` — ${entry.occurrences} occurrence(s), example: \`${escapeInline(entry.example ?? "")}\``,
       ),
       "",
       "Tool and span names, status, and typed fields (numbers, booleans, timestamps) also pass verbatim by default — see the path inventory below.",
@@ -120,17 +124,18 @@ function renderWarningsSection(manifest: Manifest, inventory: InventoryEntry[]):
 
 /**
  * Section 3 — the full path inventory. One row per `InventoryEntry` (sorted, as `entries()`
- * returns): path · count · disposition · distinct values · example. Newlines collapse to spaces
- * and pipes are escaped so a value can't break the table row. An empty inventory (zero-record
- * corpus) renders an empty table with a placeholder rather than crashing (issue #9 AC #3).
+ * returns): path · count · disposition · distinct values · example. Newlines collapse to spaces,
+ * pipes and backticks are escaped so a value can't break the table row or its inline-code span.
+ * An empty inventory (zero-record corpus) renders an empty table with a placeholder rather than
+ * crashing (issue #9 AC #3).
  */
 function renderInventorySection(inventory: InventoryEntry[]): string {
   const rows = inventory.map((entry) => {
-    const path = entry.path.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+    const path = escapeInline(entry.path).replace(/\|/g, "\\|");
     const example =
       entry.example === null
         ? "—"
-        : `\`${entry.example.replace(/\r?\n/g, " ").replace(/\|/g, "\\|")}\``;
+        : `\`${escapeInline(entry.example).replace(/\|/g, "\\|")}\``;
     const distinct = `${entry.distinctValues}${entry.capped ? "+" : ""}`;
     return `| \`${path}\` | ${entry.occurrences} | ${entry.disposition} | ${distinct} | ${example} |`;
   });
