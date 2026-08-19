@@ -175,9 +175,8 @@ async function grab(args: string[]): Promise<void> {
   const keymap = noKeymap ? undefined : Keymap.open(keymapPath);
   const onToken = keymap?.callback();
   // Per-path inventory (issue #7): a pure observer of the walk's leaf decisions. The manifest's
-  // `collectPaths`/`collectTokens` corpus-wide pass is unchanged; wiring this inventory into
-  // `report.md` is deferred to a later issue, so the accumulator is built and attached now but
-  // not yet surfaced in the bundle output.
+  // `collectPaths`/`collectTokens` corpus-wide pass is unchanged; the snapshot
+  // (`inventory.entries()`) is threaded into `writeBundle` and rendered into `report.md` (issue #9).
   const inventory = new PathInventory();
   const onInventory = inventory.callback();
   const corpusRecords = kept.map((record) =>
@@ -187,7 +186,12 @@ async function grab(args: string[]): Promise<void> {
   const warnings = resolver.unmatchedWarnings();
   const policyYaml = existsSync(effectivePolicyPath) ? readFileSync(effectivePolicyPath, "utf8") : undefined;
   const policyHash = policyYaml !== undefined ? createHash("sha256").update(policyYaml).digest("hex") : undefined;
-  await writeBundle(out, corpusRecords, excludedByLimit, excludedByWindow, { policyYaml, policyHash, warnings });
+  await writeBundle(out, corpusRecords, excludedByLimit, excludedByWindow, {
+    policyYaml,
+    policyHash,
+    warnings,
+    inventory: inventory.entries(),
+  });
 
   // Flush the keymap (mode 0600) and refresh the `.trace-grab/.gitignore` after the bundle is
   // safely written — the keymap never enters the bundle directory.
