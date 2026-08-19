@@ -1,6 +1,6 @@
 {
   "name": "@emetlabs/trace-grab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read a partner's trace export, normalize it, sanitize it, write a bundle to their own disk. Contributor-side, open source, zero Emet egress.",
   "license": "Apache-2.0",
   "type": "module",
