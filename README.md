@@ -4,8 +4,8 @@
 bundle to **your** disk. It has no server, no account, and no upload step. Nothing leaves your
 environment unless you send it yourself.
 
-For what the tool protects against — and explicitly what it does not — read
-[`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md). The notes below are checkable, not reassuring.
+For what the tool protects against — and explicitly what it does not — the notes below are
+checkable, not reassuring.
 
 ## What it does
 
@@ -80,9 +80,8 @@ precedence table live in [`docs/POLICY.md`](docs/POLICY.md).
 
 Tool and span names, span kind, status, and `error.kind` pass through in plaintext. They are the
 vocabulary any analysis is written in, and they are also a disclosure class: a span named
-`notify_bankruptcy_counsel` says something on its own. That is a deliberate, named exception — see
-[`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) — not a leak. If a name is itself sensitive, `drop`
-the field.
+`notify_bankruptcy_counsel` says something on its own. That is a deliberate, named exception — not a
+leak. If a name is itself sensitive, `drop` the field.
 
 ## Your salt and your keymap
 
