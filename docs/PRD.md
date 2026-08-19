@@ -1,6 +1,6 @@
 # trace-grab — Product Requirements
 
-**Package:** `@emet/trace-grab` · **Binary:** `trace-grab` · **License:** Apache-2.0 · **Status:** Scaffolding
+**Package:** `@emetlabs/trace-grab` · **Binary:** `trace-grab` · **License:** Apache-2.0 · **Status:** Scaffolding
 
 ## 1. Why this exists
 

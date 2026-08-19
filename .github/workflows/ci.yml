@@ -41,7 +41,7 @@ jobs:
           mkdir /tmp/smoke
           cd /tmp/smoke
           npm init -y
-          npm install ${{ github.workspace }}/emet-trace-grab-*.tgz
+          npm install ${{ github.workspace }}/emetlabs-trace-grab-*.tgz
           npx trace-grab grab ${{ github.workspace }}/test/fixtures/fixture-100.jsonl --out /tmp/corpus-smoke
           test -f /tmp/corpus-smoke/corpus.jsonl
           test -f /tmp/corpus-smoke/manifest.json

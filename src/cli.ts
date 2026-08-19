@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -266,6 +266,10 @@ function main(argv: string[]): void {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Entry guard: resolve `process.argv[1]` through symlinks before comparing so the
+// binary still runs when npm installs it as a `node_modules/.bin` symlink (where
+// argv[1] is the link path but import.meta.url is the real file). Without this,
+// `npx trace-grab` after install silently no-ops — main() never fires.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main(process.argv.slice(2));
 }

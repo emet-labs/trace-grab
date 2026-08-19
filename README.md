@@ -15,7 +15,7 @@ bundle — `corpus.jsonl`, `manifest.json`, `policy.yaml`, `report.md` — to a 
 One pass, no network, no prompts:
 
 ```sh
-npx @emet/trace-grab grab ./langsmith-export --out ./corpus
+npx @emetlabs/trace-grab grab ./langsmith-export --out ./corpus
 ```
 
 The `grab` and `check` verbs work today on file exports (LangSmith export, OTLP JSON, plain

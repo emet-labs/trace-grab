@@ -1,0 +1,43 @@
+name: publish
+
+# Continuous deployment for the npm package.
+# Fires when a version tag `v*` is pushed (e.g. `git tag v0.1.1 && git push origin v0.1.1`)
+# or on manual dispatch. Publishes to the `@emetlabs` scope with npm provenance
+# (SLSA build attestations tied to this workflow run + commit).
+#
+# Re-publishing an existing version fails (npm rejects it), so bump `version`
+# in package.json before tagging. Do not retag a released version.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+      - run: bun run build
+      - run: bun test
+
+      # npm (not bun) is required: provenance is an npm feature.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish with provenance
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}

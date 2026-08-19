@@ -12,7 +12,7 @@ have installed. The second one has a cost that lands at the worst moment in the 
 - **Development:** Bun — package manager, `bun test`, TypeScript with no build step. Matches the
   house toolchain (`website/` already has a `bun.lock`).
 - **Distribution:** plain **Node-compatible ESM**, published to npm, run as
-  `npx @emet/trace-grab`. Works identically under `bunx` and `pnpm dlx`.
+  `npx @emetlabs/trace-grab`. Works identically under `bunx` and `pnpm dlx`.
 - **Enforcement:** Bun-only APIs (`Bun.file`, `Bun.write`, `Bun.serve`, `bun:sqlite`) are banned
   from `src/` and permitted in tests and scripts. CI runs the built package under Node 20 and 22.
 - **Engine floor:** Node ≥ 20 — native `fetch`, `node:util.parseArgs`, stable ESM.

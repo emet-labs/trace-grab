@@ -37,9 +37,9 @@ describe("no Emet-owned references outside package scope", () => {
     const files = listSourceFiles();
     const violations: string[] = [];
     // The only legitimate occurrences of "emet" are the scoped package name
-    // `@emet/trace-grab` and the GitHub org `emet-labs`. Strip those, then any
+    // `@emetlabs/trace-grab` and the GitHub org `emet-labs`. Strip those, then any
     // surviving "emet" is a stray domain/endpoint/identifier reference.
-    const ALLOWED = /@emet\/trace-grab|emet-labs/gi;
+    const ALLOWED = /@emetlabs\/trace-grab|emet-labs/gi;
     for (const { relPath, content } of files) {
       const remaining = content.replace(ALLOWED, "");
       const matches = remaining.match(/emet/gi);

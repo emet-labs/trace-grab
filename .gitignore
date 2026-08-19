@@ -2,3 +2,4 @@ node_modules/
 dist/
 .trace-grab/
 corpus*/
+*.tgz

@@ -10,7 +10,7 @@ import type { InventoryEntry } from "../src/sanitize/inventory.js";
 function manifest(overrides: Partial<Manifest> = {}): Manifest {
   return {
     schema_version: "trace-corpus-v1",
-    generator: { name: "@emet/trace-grab", version: "0.1.0" },
+    generator: { name: "@emetlabs/trace-grab", version: "0.1.0" },
     generated_at: "2026-08-18T23:55:37.481Z",
     source: { vendor: "langsmith" },
     counts: {
