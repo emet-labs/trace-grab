@@ -19,13 +19,23 @@ import {
   sanitizeRecord,
   writeTraceGrabGitignore,
 } from "./sanitize/index.js";
-import { looksLikeOtlp, readGenericJsonl, readLangSmithExport, readOtlpJson } from "./sources/index.js";
+import {
+  clearLangSmithCheckpoint,
+  containsLangSmithSecret,
+  fetchLangSmithProject,
+  LangSmithApiError,
+  looksLikeOtlp,
+  readGenericJsonl,
+  readLangSmithExport,
+  readOtlpJson,
+  redactLangSmithSecret,
+} from "./sources/index.js";
 
 const USAGE = `Usage: trace-grab <command> [options]
 
 Commands:
   grab <input> --out <dir>   Read, normalize, sanitize, and write a bundle
-    [--from langsmith|otlp|generic]
+    [--from langsmith-api|langsmith|otlp|generic]
     [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>]
     [--salt-file <path>] [--no-keymap]
   check --value <v> <bundle-dir>  Locate a value's token and any plaintext hits
@@ -94,8 +104,16 @@ function sniffSource(path: string): string {
   return "generic";
 }
 
-async function grab(args: string[]): Promise<void> {
+export async function grab(args: string[]): Promise<void> {
   const from = parseFlag(args, "--from");
+  const apiKeyForOutput = from === "langsmith-api" ? (process.env["LANGSMITH_API_KEY"] ?? "") : "";
+  const log = (message: string): void => console.log(redactLangSmithSecret(message, apiKeyForOutput));
+  const logError = (message: string): void => console.error(redactLangSmithSecret(message, apiKeyForOutput));
+  if (args.some((arg) => arg === "--api-key" || arg.startsWith("--api-key="))) {
+    logError("error: --api-key is not supported; set LANGSMITH_API_KEY in the environment instead");
+    process.exitCode = 1;
+    return;
+  }
   const since = parseFlag(args, "--since");
   const until = parseFlag(args, "--until");
   const maxTracesRaw = parseFlag(args, "--max-traces");
@@ -113,8 +131,8 @@ async function grab(args: string[]): Promise<void> {
   const [input] = positional;
   const out = parseFlag(positional, "--out");
   if (!input || !out) {
-    console.error(
-      "Usage: trace-grab grab <input> --out <dir> [--from langsmith|otlp|generic] [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>] [--salt-file <path>] [--no-keymap]",
+    logError(
+      "Usage: trace-grab grab <input> --out <dir> [--from langsmith-api|langsmith|otlp|generic] [--since <iso>] [--until <iso>] [--max-traces <n>] [--policy <path>] [--salt-file <path>] [--no-keymap]",
     );
     process.exitCode = 1;
     return;
@@ -124,19 +142,19 @@ async function grab(args: string[]): Promise<void> {
   if (maxTracesRaw !== undefined) {
     const n = Number.parseInt(maxTracesRaw, 10);
     if (Number.isNaN(n) || n < 0) {
-      console.error(`error: --max-traces must be a non-negative integer, got '${maxTracesRaw}'`);
+      logError(`error: --max-traces must be a non-negative integer, got '${maxTracesRaw}'`);
       process.exitCode = 1;
       return;
     }
     maxTraces = n;
   }
   if (since !== undefined && Number.isNaN(Date.parse(since))) {
-    console.error(`error: --since is not a valid ISO-8601 timestamp: '${since}'`);
+    logError(`error: --since is not a valid ISO-8601 timestamp: '${since}'`);
     process.exitCode = 1;
     return;
   }
   if (until !== undefined && Number.isNaN(Date.parse(until))) {
-    console.error(`error: --until is not a valid ISO-8601 timestamp: '${until}'`);
+    logError(`error: --until is not a valid ISO-8601 timestamp: '${until}'`);
     process.exitCode = 1;
     return;
   }
@@ -148,7 +166,7 @@ async function grab(args: string[]): Promise<void> {
     policy = loadPolicy(effectivePolicyPath);
   } catch (e) {
     if (e instanceof PolicyError) {
-      console.error(`error: ${e.message}`);
+      logError(`error: ${e.message}`);
       process.exitCode = 1;
       return;
     }
@@ -156,7 +174,17 @@ async function grab(args: string[]): Promise<void> {
   }
   const resolver = new PolicyResolver(policy);
 
-  const rawRecords = readInput(input, from);
+  let checkpointPath: string | undefined;
+  let rawRecords: RawRecord[];
+  if (from === "langsmith-api") {
+    // Fetch the whole project, then apply the local whole-trace window below. Applying time
+    // bounds to individual API runs could fetch a child without its root and truncate a trace.
+    const fetched = await fetchLangSmithProject(input);
+    rawRecords = fetched.records;
+    checkpointPath = fetched.checkpointPath;
+  } else {
+    rawRecords = readInput(input, from);
+  }
   const { kept, excludedByWindow, excludedByLimit } = limitTraces(rawRecords, { since, until, maxTraces });
 
   // Persistent salt (ADR-0006): minted once at the default `.trace-grab/salt` (or `--salt-file`),
@@ -164,7 +192,7 @@ async function grab(args: string[]): Promise<void> {
   const root = process.cwd();
   const { salt, created, path: saltPath } = loadOrCreateSaltWithMeta(root, saltFile);
   if (created) {
-    console.log(
+    log(
       `notice: created partner salt at ${saltPath}. Losing this salt breaks cross-batch token correlation — back it up (ADR-0006).`,
     );
   }
@@ -173,7 +201,15 @@ async function grab(args: string[]): Promise<void> {
   // `--no-keymap`; lives in `.trace-grab/keymap.jsonl`, never inside the bundle directory.
   const keymapPath = join(root, ".trace-grab", "keymap.jsonl");
   const keymap = noKeymap ? undefined : Keymap.open(keymapPath);
-  const onToken = keymap?.callback();
+  const keymapCallback = keymap?.callback();
+  const onToken = keymapCallback === undefined
+    ? undefined
+    : (token: string, value: string): void => {
+        // The active API credential is never useful reverse-map data and must not reach disk,
+        // even when an application accidentally traced its environment.
+        if (apiKeyForOutput && value.includes(apiKeyForOutput)) return;
+        keymapCallback(token, value);
+      };
   // Per-path inventory (issue #7): a pure observer of the walk's leaf decisions. The manifest's
   // `collectPaths`/`collectTokens` corpus-wide pass is unchanged; the snapshot
   // (`inventory.entries()`) is threaded into `writeBundle` and rendered into `report.md` (issue #9).
@@ -182,6 +218,14 @@ async function grab(args: string[]): Promise<void> {
   const corpusRecords = kept.map((record) =>
     sanitizeRecord(record, salt, resolver, onToken, onInventory),
   );
+  if (
+    apiKeyForOutput &&
+    corpusRecords.some((record) => containsLangSmithSecret(record, apiKeyForOutput))
+  ) {
+    throw new LangSmithApiError(
+      "the active LANGSMITH_API_KEY appears in a pass-verbatim or revealed field; drop or tokenize that field before writing this bundle",
+    );
+  }
 
   const warnings = resolver.unmatchedWarnings();
   const policyYaml = existsSync(effectivePolicyPath) ? readFileSync(effectivePolicyPath, "utf8") : undefined;
@@ -197,11 +241,18 @@ async function grab(args: string[]): Promise<void> {
   // safely written — the keymap never enters the bundle directory.
   keymap?.flush();
   writeTraceGrabGitignore(root);
+  if (checkpointPath) clearLangSmithCheckpoint(checkpointPath);
 
-  console.log(
+  log(
     `Wrote ${corpusRecords.length} record(s) to ${out}` +
       ` (excluded ${excludedByWindow} trace(s) by window, ${excludedByLimit} by limit)`,
   );
+}
+
+export function printGrabFailure(error: unknown, from: string | undefined): void {
+  const rendered = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  const key = from === "langsmith-api" ? (process.env["LANGSMITH_API_KEY"] ?? "") : "";
+  console.error(redactLangSmithSecret(rendered, key));
 }
 
 /**
@@ -246,7 +297,7 @@ function main(argv: string[]): void {
   switch (command) {
     case "grab":
       void grab(rest).catch((error) => {
-        console.error(error);
+        printGrabFailure(error, parseFlag(rest, "--from"));
         process.exitCode = 1;
       });
       return;

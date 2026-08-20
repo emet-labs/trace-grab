@@ -158,6 +158,14 @@ function mapRun(run: unknown): RawRecord {
   };
 }
 
+/**
+ * Map native LangSmith run objects to the corpus input shape. Both file exports and the API
+ * fetcher call this function so there is exactly one normalization path (ADR-0008).
+ */
+export function parseLangSmithRuns(runs: readonly unknown[]): RawRecord[] {
+  return runs.map(mapRun);
+}
+
 /** Parse a `.jsonl` file: one run object per non-blank line. */
 function readJsonlFile(path: string): unknown[] {
   const text = readFileSync(path, "utf8");
@@ -210,5 +218,5 @@ export function readLangSmithExport(path: string): RawRecord[] {
   for (const file of files) {
     runs.push(...readExportFile(file));
   }
-  return runs.map(mapRun);
+  return parseLangSmithRuns(runs);
 }

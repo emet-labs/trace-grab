@@ -18,9 +18,9 @@ One pass, no network, no prompts:
 npx @emetlabs/trace-grab grab ./langsmith-export --out ./corpus
 ```
 
-The `grab` and `check` verbs work today on file exports (LangSmith export, OTLP JSON, plain
-span-shaped JSONL). The LangSmith API fetcher — the only networked module — is the remaining piece
-([#13](https://github.com/emet-labs/trace-grab/issues/13)).
+The `grab` and `check` verbs work on file exports (LangSmith export, OTLP JSON, plain span-shaped
+JSONL). An opt-in LangSmith API convenience path is also available; file exports remain the
+recommended path because they require no broad read credential.
 
 ## What it does not do
 
@@ -102,10 +102,39 @@ On first run the tool writes `.trace-grab/salt` (mode `0600`). Two things depend
 | Source | How |
 | --- | --- |
 | Files you exported yourself (LangSmith export, OTLP JSON, plain span-shaped JSONL) | `grab ./dir` — no credentials involved |
-| LangSmith API | `grab --from langsmith-api <project>`, reads `LANGSMITH_API_KEY` from the environment — forthcoming ([#13](https://github.com/emet-labs/trace-grab/issues/13)) |
+| LangSmith API | `grab --from langsmith-api <project> --out ./corpus`, reads `LANGSMITH_API_KEY` from the environment |
 
 The file path is the recommended one. It needs no credentials, works offline, and the tool cannot
 have read anything beyond the files you handed it.
+
+### LangSmith API convenience path
+
+Set `LANGSMITH_API_KEY` in the environment, then name a project (the key is not accepted as a CLI
+flag). `LANGSMITH_ENDPOINT` optionally changes the base URL from
+`https://api.smith.langchain.com`; `LANGSMITH_WORKSPACE_ID` is sent as `x-tenant-id` when an
+organization-scoped key requires it.
+
+```sh
+LANGSMITH_API_KEY="…" npx @emetlabs/trace-grab grab --from langsmith-api my-project --out ./corpus
+```
+
+This path makes exactly these requests against the configured LangSmith base URL, using plain
+`fetch` and refusing cross-origin redirects:
+
+- `GET /api/v1/sessions?name=<project>` resolves the project name to its LangSmith session ID.
+- `POST /api/v1/runs/query` fetches native run records with cursor pagination.
+
+`--since` and `--until` are applied locally after the pull, by whole trace. This avoids a
+server-side per-run time filter returning a child while omitting its root and silently truncating
+the trace.
+
+After every page, progress is written under `.trace-grab/langsmith-api/` with mode `0600`. Native
+run payloads in that checkpoint are encrypted using a key derived in memory from
+`LANGSMITH_API_KEY`; the original key is therefore required to resume. The checkpoint is deleted
+only after the sanitized bundle is written successfully. Rate-limit responses honor `Retry-After`
+and otherwise use bounded exponential backoff. Credentials are never stored, excluded from the
+local reverse keymap, blocked from pass-verbatim bundle fields, and redacted from API error bodies
+before they reach the terminal.
 
 ## Transfer
 
