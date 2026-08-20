@@ -4,8 +4,8 @@
 bundle to **your** disk. It has no server, no account, and no upload step. Nothing leaves your
 environment unless you send it yourself.
 
-For what the tool protects against — and explicitly what it does not — the notes below are
-checkable, not reassuring.
+For what the tool protects against — and explicitly what it does not — see the
+[`THREAT-MODEL.md`](THREAT-MODEL.md). Its claims are intended to be checkable, not reassuring.
 
 ## What it does
 
