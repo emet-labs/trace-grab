@@ -15,6 +15,23 @@ If code and this document disagree, that's a bug in the code.
 `default` is not something a partner writes in `tracegrab.yaml` — it is what `decide(path)` returns when no
 rule matches. The sanitize walk then applies the built-in behavior from the SCHEMA.md disposition table.
 
+## Path syntax
+
+Policy entries use the same dotted paths printed in `report.md` and documented in
+[`SCHEMA.md`](SCHEMA.md):
+
+- `.` separates object segments: `inputs.user.email`.
+- `*` matches exactly one segment: `inputs.*.email` matches `inputs.user.email`, but not
+  `inputs.user.profile.email`.
+- `**` matches zero or more segments: `inputs.**` matches `inputs` and every descendant.
+- Array elements use a literal `[*]` suffix on their parent segment:
+  `inputs.items[*].sku`. Every element shares that path; numeric indexes are not part of the
+  policy language.
+
+There is no escaping syntax. A source key containing `.` or a wildcard token cannot be targeted
+unambiguously. Use the path inventory in the generated report to copy the path the sanitizer
+actually observed, and treat an unmatched-rule warning as a configuration error to investigate.
+
 ## Resolution algorithm
 
 Given a concrete dotted path and a parsed policy:
@@ -63,45 +80,40 @@ Step 3 is the primary key. Step 5 is the tie-breaker only. This is the only read
 
 ## Worked examples
 
-```yaml
-# Example 1: reveal carves out from a broad drop
-drop:
-  - inputs.**            # specificity: 1 literal, 2 segments
-reveal:
-  - inputs.user.email    # specificity: 3 literals, 3 segments
-```
-
-`decide("inputs.user.email")` → both rules match. `inputs.user.email` is more specific (3 literals > 1).
-Result: **`reveal`**. The partner explicitly carved this path out of the drop.
+### Reveal an application status enum
 
 ```yaml
-# Example 2: equal specificity → fail closed
-drop:
-  - inputs.user.email    # 3 literals, 3 segments
-reveal:
-  - inputs.user.email    # 3 literals, 3 segments
-```
-
-Tie on specificity. `drop` is more restrictive. Result: **`drop`**.
-
-```yaml
-# Example 3: tokenize narrows a broad reveal
-reveal:
-  - inputs.**            # 1 literal, 2 segments
-tokenize:
-  - inputs.user.secret   # 3 literals, 3 segments
-```
-
-`decide("inputs.user.secret")` → both match. `inputs.user.secret` is more specific. Result: **`tokenize`**.
-
-```yaml
-# Example 4: no rules match
 reveal:
   - outputs.status
 ```
 
-`decide("inputs.user.email")` → no rule matches. Result: **`default`** → built-in tokenize (string leaf,
-not in the pass-verbatim list).
+An application-level string such as `"approved"` would normally be tokenized. This rule keeps
+`outputs.status` readable. It does not affect the corpus record's top-level `status`, which is a
+structural enum and already passes by default.
+
+### Drop an identifier whose linkage is sensitive
+
+```yaml
+drop:
+  - inputs.patient_id
+```
+
+Tokenization would preserve whether the same patient appears in many traces. If that linkage is
+itself sensitive, `drop` removes the field and the equality relationship with it. This is also
+useful for high-cardinality identifiers that add no needed analytical signal.
+
+### Narrow an over-broad reveal
+
+```yaml
+reveal:
+  - inputs.**
+tokenize:
+  - inputs.auth.secret
+```
+
+Both rules match `inputs.auth.secret`, but the exact `tokenize` path is more specific than
+`inputs.**`, so the secret is tokenized while other input strings remain revealed. If equally
+specific rules conflict, the truth table above applies instead.
 
 ## Required fields
 
@@ -132,6 +144,11 @@ field name, silently matching nothing (ADR-0009).
 
 ## `time: shift`
 
+```yaml
+time: shift
+```
+
 When `time: shift` is set, `start` and `end` timestamps are shifted by a single per-corpus constant
 derived from the salt (ADR-0006). Ordering and every interval survive; absolute position doesn't.
-The default is `time: absolute` — timestamps pass through unchanged.
+Record counts and traffic volume remain visible. The default is `time: absolute` — timestamps pass
+through unchanged.
