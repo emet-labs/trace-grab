@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -246,5 +247,111 @@ describe("grab end to end", () => {
     expect(report).not.toContain("_No paths — zero-record corpus._");
     // Tokenized string paths from the fixture surface in the table.
     expect(report).toContain("`inputs.user_id`");
+  });
+});
+
+describe("CLI directory input", () => {
+  const cliPath = join(import.meta.dir, "..", "src", "cli.ts");
+  const LANGSMITH_EXPORT_FIXTURE = join(import.meta.dir, "fixtures", "langsmith-export.jsonl");
+
+  function langSmithExportDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-dir-test-"));
+    workDirs.push(dir);
+    const exportDir = join(dir, "export");
+    mkdirSync(exportDir);
+    copyFileSync(LANGSMITH_EXPORT_FIXTURE, join(exportDir, "export.jsonl"));
+    return exportDir;
+  }
+
+  test("a directory with no --from fails actionably instead of crashing on EISDIR", () => {
+    const exportDir = langSmithExportDir();
+    const out = join(exportDir, "..", "corpus");
+    const result = spawnSync(process.execPath, [cliPath, "grab", exportDir, "--out", out], {
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("is a directory");
+    expect(result.stderr).toContain("--from langsmith");
+    expect(result.stderr).not.toContain("EISDIR");
+  });
+
+  test("a directory with --from otlp fails actionably instead of crashing on EISDIR", () => {
+    const exportDir = langSmithExportDir();
+    const out = join(exportDir, "..", "corpus");
+    const result = spawnSync(
+      process.execPath,
+      [cliPath, "grab", exportDir, "--out", out, "--from", "otlp"],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("is a directory");
+    expect(result.stderr).not.toContain("EISDIR");
+  });
+
+  test("a directory with --from langsmith reads every file in it", () => {
+    const exportDir = langSmithExportDir();
+    const out = join(exportDir, "..", "corpus");
+    const result = spawnSync(
+      process.execPath,
+      [cliPath, "grab", exportDir, "--out", out, "--from", "langsmith"],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(out, "corpus.jsonl"), "utf8").trim().split("\n").length).toBe(7);
+  });
+
+  test("a directory with --from generic fails actionably instead of crashing on EISDIR", () => {
+    const exportDir = langSmithExportDir();
+    const out = join(exportDir, "..", "corpus");
+    const result = spawnSync(
+      process.execPath,
+      [cliPath, "grab", exportDir, "--out", out, "--from", "generic"],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("is a directory");
+    expect(result.stderr).not.toContain("EISDIR");
+  });
+
+  test("a single OTLP file still auto-detects with no --from (unaffected by the directory guard)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-dir-test-"));
+    workDirs.push(dir);
+    const file = join(dir, "otlp-export.json");
+    copyFileSync(join(import.meta.dir, "fixtures", "otlp-export.json"), file);
+    const out = join(dir, "corpus");
+    const result = spawnSync(process.execPath, [cliPath, "grab", file, "--out", out], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(out, "corpus.jsonl"), "utf8").trim().split("\n").length).toBe(5);
+  });
+
+  test("a nonexistent path is not misreported as a directory error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-dir-test-"));
+    workDirs.push(dir);
+    const missing = join(dir, "does-not-exist.jsonl");
+    const out = join(dir, "corpus");
+    const result = spawnSync(process.execPath, [cliPath, "grab", missing, "--out", out], {
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).not.toContain("is a directory");
+  });
+
+  test("--from langsmith-api is unaffected by the directory guard (input is a project name, not a path)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-dir-test-"));
+    workDirs.push(dir);
+    const out = join(dir, "corpus");
+    const env = { ...process.env };
+    delete env["LANGSMITH_API_KEY"];
+    const result = spawnSync(
+      process.execPath,
+      [cliPath, "grab", "--from", "langsmith-api", "some-project", "--out", out],
+      { cwd: dir, env, encoding: "utf8" },
+    );
+    // Fails for the expected reason (missing key), never misreported as a directory error.
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("LANGSMITH_API_KEY is required");
+    expect(result.stderr).not.toContain("is a directory");
   });
 });

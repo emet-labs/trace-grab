@@ -138,6 +138,25 @@ export async function grab(args: string[]): Promise<void> {
     return;
   }
 
+  // Only the LangSmith export reader walks a directory of files; every other reader (and
+  // auto-detection, which only sniffs a single file's content) expects one file. A directory
+  // pointed at any other path fails as an unhandled EISDIR deep in a reader otherwise.
+  if (from !== "langsmith-api" && from !== "langsmith") {
+    let inputStats;
+    try {
+      inputStats = statSync(input);
+    } catch {
+      inputStats = undefined;
+    }
+    if (inputStats?.isDirectory()) {
+      logError(
+        `error: '${input}' is a directory; only --from langsmith reads a directory (a LangSmith export). Pass --from langsmith, or point at a single file for other formats.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   let maxTraces: number | undefined;
   if (maxTracesRaw !== undefined) {
     const n = Number.parseInt(maxTracesRaw, 10);

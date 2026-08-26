@@ -15,12 +15,15 @@ bundle — `corpus.jsonl`, `manifest.json`, `policy.yaml`, `report.md` — to a 
 One pass, no network, no prompts:
 
 ```sh
-npx @emetlabs/trace-grab grab ./langsmith-export --out ./corpus
+npx @emetlabs/trace-grab grab ./langsmith-export --out ./corpus --from langsmith
 ```
 
 The `grab` and `check` verbs work on file exports (LangSmith export, OTLP JSON, plain span-shaped
 JSONL). An opt-in LangSmith API convenience path is also available; file exports remain the
 recommended path because they require no broad read credential.
+
+A directory of exported files is only ever read by `--from langsmith`; the OTLP and generic JSONL
+readers each take a single file, and are auto-detected without a `--from` flag.
 
 ## What it does not do
 
@@ -101,7 +104,7 @@ On first run the tool writes `.trace-grab/salt` (mode `0600`). Two things depend
 
 | Source | How |
 | --- | --- |
-| Files you exported yourself (LangSmith export, OTLP JSON, plain span-shaped JSONL) | `grab ./dir` — no credentials involved |
+| Files you exported yourself (LangSmith export, OTLP JSON, plain span-shaped JSONL) | `grab ./dir --from langsmith` for a LangSmith export directory, or `grab ./file.json` (auto-detected) for a single OTLP/JSONL file — no credentials involved |
 | LangSmith API | `grab --from langsmith-api <project> --out ./corpus`, reads `LANGSMITH_API_KEY` from the environment |
 
 The file path is the recommended one. It needs no credentials, works offline, and the tool cannot

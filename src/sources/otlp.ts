@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 import type {
   JsonValue,
@@ -247,8 +247,15 @@ export function readOtlpJson(path: string): RawRecord[] {
   return records;
 }
 
-/** Heuristic: does this JSON file look like an OTLP export? */
+/** Heuristic: does this JSON file look like an OTLP export? Directories never match. */
 export function looksLikeOtlp(path: string): boolean {
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch {
+    return false;
+  }
+  if (stats.isDirectory()) return false;
   const text = readFileSync(path, "utf8").trimStart();
   if (!text.startsWith("{")) return false;
   try {

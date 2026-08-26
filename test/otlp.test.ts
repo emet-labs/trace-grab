@@ -1,10 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RawRecord } from "../src/normalize/index.js";
-import { readOtlpJson } from "../src/sources/index.js";
+import { looksLikeOtlp, readOtlpJson } from "../src/sources/index.js";
 
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "otlp-export.json");
+const LANGSMITH_FIXTURE_PATH = join(import.meta.dir, "fixtures", "langsmith-export.jsonl");
 
 const records: RawRecord[] = readOtlpJson(FIXTURE_PATH);
 
@@ -128,5 +131,47 @@ describe("otlp parser", () => {
     // recognized fields are not duplicated into unmapped
     expect("traceId" in http.unmapped).toBe(false);
     expect("spanId" in http.unmapped).toBe(false);
+  });
+});
+
+describe("looksLikeOtlp", () => {
+  const dirs: string[] = [];
+
+  afterAll(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("true for a real OTLP export file", () => {
+    expect(looksLikeOtlp(FIXTURE_PATH)).toBe(true);
+  });
+
+  test("false for a non-OTLP JSON file (no resourceSpans)", () => {
+    expect(looksLikeOtlp(LANGSMITH_FIXTURE_PATH)).toBe(false);
+  });
+
+  test("false for a directory, never throws EISDIR", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-otlp-sniff-"));
+    dirs.push(dir);
+    expect(() => looksLikeOtlp(dir)).not.toThrow();
+    expect(looksLikeOtlp(dir)).toBe(false);
+  });
+
+  test("false for a directory containing files, still never throws", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-otlp-sniff-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "run.json"), '{"resourceSpans":[]}');
+    expect(looksLikeOtlp(dir)).toBe(false);
+  });
+
+  test("false for a path that does not exist", () => {
+    expect(looksLikeOtlp(join(tmpdir(), "trace-grab-does-not-exist-xyz"))).toBe(false);
+  });
+
+  test("false for plain text that isn't JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "trace-grab-otlp-sniff-"));
+    dirs.push(dir);
+    const path = join(dir, "notes.txt");
+    writeFileSync(path, "this is not json");
+    expect(looksLikeOtlp(path)).toBe(false);
   });
 });
