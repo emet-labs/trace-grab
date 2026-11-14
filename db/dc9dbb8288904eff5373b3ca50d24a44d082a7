@@ -1,0 +1,19 @@
+.github/workflows/cloudsmith-candidate.yml
+  s_d0604f384bb2bf::t_7a9a45b2717391 1-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dbdc9dbb8288904eff5373b3ca50d24a44d082a7",
+  "prompts": {},
+  "sessions": {
+    "s_d0604f384bb2bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80389ecc-5e43-4e94-be9d-0b95a8bf4646",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Arnab Ghosh <arnabcare21@gmail.com>"
+    }
+  }
+}
