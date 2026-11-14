@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_e9bfbe2fb262c1::t_8f980fa13bd7c1 9,18,29
+.github/workflows/publish.yml
+  s_e9bfbe2fb262c1::t_679a227ef30117 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7cb14ade1d76b994c813e1586cd899661cc92d9e",
+  "prompts": {},
+  "sessions": {
+    "s_e9bfbe2fb262c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "04179526-90ec-451a-9c14-0344667f24da",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Arnab Ghosh <arnabcare21@gmail.com>"
+    }
+  }
+}
