@@ -1,0 +1,169 @@
+name: cloudsmith-candidate
+
+# Stages the already-released @emetlabs/trace-grab tarball in the private Cloudsmith repository
+# trace-grab-candidate and proves a clean consumer can install and run it from there.
+#
+# This is an ADDITIONAL channel. It never builds or republishes: it takes the exact tarball that
+# publish.yml attached to the GitHub Release (publish.yml is untouched, and so is its npm OIDC
+# provenance), proves those bytes equal what npm serves for the same version, and pushes them
+# unchanged. Same version, same bytes, in both places.
+#
+# Authentication is a Cloudsmith service-account API key held as the CLOUDSMITH_API_KEY secret of
+# the protected `trace-grab-candidate` GitHub environment only (required reviewers, main only),
+# never a repository secret. Cloudsmith OIDC is a premium feature we do not have.
+#
+# Run it from main after publish.yml has released the version:
+#   Actions -> cloudsmith-candidate -> Run workflow (version without the v, publish true).
+# With publish false it only fetches and verifies the release tarball (no environment, no secret).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Released version without the v prefix (the GitHub Release is v<version>)
+        required: true
+        type: string
+      publish:
+        description: Push to the private Cloudsmith candidate repository and run the consumer proof
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudsmith-candidate-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CLOUDSMITH_REPOSITORY: trace-grab-candidate
+
+jobs:
+  fetch:
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download the released tarball and prove it is what npm serves
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = refs/heads/main
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          mkdir -p "${RUNNER_TEMP}/tarball"
+          gh release download "v${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'emetlabs-trace-grab-*.tgz' --dir "${RUNNER_TEMP}/tarball"
+          tarball="$(ls "${RUNNER_TEMP}"/tarball/emetlabs-trace-grab-*.tgz)"
+          test "$(basename "${tarball}")" = "emetlabs-trace-grab-${VERSION}.tgz"
+          manifest="$(tar -xzOf "${tarball}" package/package.json)"
+          test "$(jq -r .name <<<"${manifest}")" = '@emetlabs/trace-grab'
+          test "$(jq -r .version <<<"${manifest}")" = "${VERSION}"
+          test "$(jq -r .license <<<"${manifest}")" = 'Apache-2.0'
+          actual="sha512-$(openssl dgst -sha512 -binary "${tarball}" | base64 -w0)"
+          expected="$(npm view "@emetlabs/trace-grab@${VERSION}" dist.integrity --registry https://registry.npmjs.org/)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "release tarball ${actual} differs from npm ${expected}" >&2
+            exit 1
+          fi
+          (cd "${RUNNER_TEMP}/tarball" && sha256sum "$(basename "${tarball}")" | tee SHA256SUMS)
+          echo "Release v${VERSION} tarball equals the npm tarball (${actual})" | tee -a "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trace-grab-${{ inputs.version }}
+          path: ${{ runner.temp }}/tarball
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: inputs.publish
+    needs: fetch
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    timeout-minutes: 15
+    environment: trace-grab-candidate
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: trace-grab-${{ inputs.version }}
+          path: ${{ runner.temp }}/tarball
+      - name: Verify the downloaded bytes
+        shell: bash
+        working-directory: ${{ runner.temp }}/tarball
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Configure Cloudsmith API key
+        uses: cloudsmith-io/cloudsmith-cli-action@92b1383b22bbd36d804b858f273abcdf4d349f6b # v3
+        with:
+          api-key: ${{ secrets.CLOUDSMITH_API_KEY }}
+          verify-auth: 'true'
+      - name: Refuse an existing version, then push the tarball unchanged
+        shell: bash
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+          WORKSPACE: ${{ vars.CLOUDSMITH_WORKSPACE || 'emetlabs' }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          repo="${WORKSPACE}/${CLOUDSMITH_REPOSITORY}"
+          # A failed lookup aborts here (set -e, and the pipe is fed from a variable): it is never "absent".
+          listing="$(cloudsmith list packages "${repo}" --query "version:${VERSION}" --output-format json --show-all)"
+          existing="$(jq --arg v "${VERSION}" '[(.data // .)[] | select(.version == $v)] | length' <<<"${listing}")"
+          if [[ "${existing}" != 0 ]]; then
+            echo "${repo} already holds @emetlabs/trace-grab ${VERSION}; versions are immutable" >&2
+            exit 1
+          fi
+          cloudsmith push npm "${repo}" "${RUNNER_TEMP}/tarball/emetlabs-trace-grab-${VERSION}.tgz" --no-republish
+          echo "Pushed @emetlabs/trace-grab ${VERSION} to ${repo}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  consume:
+    if: inputs.publish
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22']
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    timeout-minutes: 15
+    environment: trace-grab-candidate
+    steps:
+      # Only the fixture comes from the repository; the package under test comes from Cloudsmith alone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v${{ inputs.version }}
+          sparse-checkout: test/fixtures
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          package-manager-cache: false
+      - name: Install the exact version from Cloudsmith and run the CLI on the fixture
+        shell: bash
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+          WORKSPACE: ${{ vars.CLOUDSMITH_WORKSPACE || 'emetlabs' }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${CLOUDSMITH_API_KEY}"
+          project="${RUNNER_TEMP}/consumer"
+          mkdir "${project}"
+          cd "${project}"
+          npm init -y >/dev/null
+          # npm expands ${CLOUDSMITH_API_KEY} itself, so the key is never written to this file.
+          cat > .npmrc <<NPMRC
+          @emetlabs:registry=https://npm.cloudsmith.io/${WORKSPACE}/${CLOUDSMITH_REPOSITORY}/
+          //npm.cloudsmith.io/${WORKSPACE}/${CLOUDSMITH_REPOSITORY}/:_authToken=\${CLOUDSMITH_API_KEY}
+          //npm.cloudsmith.io/${WORKSPACE}/${CLOUDSMITH_REPOSITORY}/:always-auth=true
+          NPMRC
+          # Cloudsmith syncs a pushed package asynchronously.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            npm install --no-audit --no-fund "@emetlabs/trace-grab@${VERSION}" && break
+            test "${attempt}" -lt 8
+            sleep 30
+          done
+          test "$(jq -r .version node_modules/@emetlabs/trace-grab/package.json)" = "${VERSION}"
+          npx trace-grab grab "${GITHUB_WORKSPACE}/test/fixtures/fixture-100.jsonl" --out "${RUNNER_TEMP}/corpus"
+          test -f "${RUNNER_TEMP}/corpus/corpus.jsonl"
+          test -f "${RUNNER_TEMP}/corpus/manifest.json"
+          echo "trace-grab ${VERSION} installed from Cloudsmith and ran on Node ${{ matrix.node-version }}"
